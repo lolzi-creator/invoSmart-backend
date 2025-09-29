@@ -40,12 +40,12 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }))
 
-// CORS configuration
+// CORS configuration - temporary fix to allow all origins
 app.use(cors({
-  origin: config.cors.origins,
+  origin: true, // Allow all origins temporarily
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Access-Control-Allow-Origin']
 }))
 
 // Rate limiting

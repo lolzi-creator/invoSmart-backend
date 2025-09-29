@@ -59,6 +59,7 @@ export interface DatabaseCustomer {
     city: string;
     country: string;
     phone?: string;
+    uid?: string;
     vat_number?: string;
     payment_terms: number;
     credit_limit?: number;

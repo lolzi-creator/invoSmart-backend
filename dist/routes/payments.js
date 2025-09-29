@@ -7,6 +7,7 @@ const validation_1 = require("../middleware/validation");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticateToken);
 router.get('/stats', paymentController_1.getPaymentStats);
+router.get('/debug', paymentController_1.debugPaymentMatching);
 router.post('/import', paymentController_1.importPayments);
 router.get('/', paymentController_1.getPayments);
 router.post('/', (0, validation_1.validateRequest)({ body: validation_1.schemas.createPayment }), paymentController_1.createPayment);

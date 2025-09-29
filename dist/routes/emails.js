@@ -19,8 +19,6 @@ router.post('/invoice/:invoiceId', (0, validation_1.validateRequest)({
 router.post('/reminder/:invoiceId', (0, validation_1.validateRequest)({
     body: validation_1.schemas.sendReminder
 }), emailController_1.sendReminderEmail);
-router.post('/preview/:invoiceId', (0, validation_1.validateRequest)({
-    body: validation_1.schemas.previewEmail
-}), emailController_1.previewEmail);
+router.get('/preview/:invoiceId', emailController_1.previewEmail);
 exports.default = router;
 //# sourceMappingURL=emails.js.map

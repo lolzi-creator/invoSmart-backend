@@ -16,5 +16,9 @@ router.patch('/:id/status', (0, validation_1.validateRequest)({
     params: validation_1.schemas.id,
     body: validation_1.schemas.updateInvoiceStatus
 }), invoiceController_1.updateInvoiceStatus);
+router.get('/:id/qr', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.generateInvoiceQR);
+router.get('/:id/pdf', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.generateInvoicePdf);
+router.post('/:id/reminder', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.sendInvoiceReminder);
+router.get('/:id/reminder-pdf/:level', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.generateReminderPdf);
 exports.default = router;
 //# sourceMappingURL=invoices.js.map

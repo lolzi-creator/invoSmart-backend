@@ -16,6 +16,7 @@ const createCustomerResponse = (dbCustomer) => {
         city: dbCustomer.city,
         country: dbCustomer.country,
         phone: dbCustomer.phone || undefined,
+        uid: dbCustomer.uid || undefined,
         vatNumber: dbCustomer.vat_number || undefined,
         paymentTerms: dbCustomer.payment_terms,
         creditLimit: dbCustomer.credit_limit || undefined,
@@ -126,7 +127,7 @@ exports.createCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         });
         return;
     }
-    const { name, company, email, address, zip, city, country = 'CH', phone, vatNumber, paymentTerms = 30, creditLimit, language = 'de', notes } = req.body;
+    const { name, company, email, address, zip, city, country = 'CH', phone, uid, vatNumber, paymentTerms = 30, creditLimit, language = 'de', notes } = req.body;
     try {
         const { data: customerNumber, error: numberError } = await supabase_1.db.customers()
             .select('customer_number')
@@ -150,6 +151,7 @@ exports.createCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             city,
             country,
             phone: phone || null,
+            uid: uid || null,
             vat_number: vatNumber || null,
             payment_terms: paymentTerms,
             credit_limit: creditLimit || null,
@@ -199,7 +201,7 @@ exports.updateCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             });
             return;
         }
-        const { name, company, email, address, zip, city, country, phone, vatNumber, paymentTerms, creditLimit, isActive, language, notes } = req.body;
+        const { name, company, email, address, zip, city, country, phone, uid, vatNumber, paymentTerms, creditLimit, isActive, language, notes } = req.body;
         const updateData = {};
         if (name !== undefined)
             updateData.name = name;
@@ -217,6 +219,8 @@ exports.updateCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             updateData.country = country;
         if (phone !== undefined)
             updateData.phone = phone;
+        if (uid !== undefined)
+            updateData.uid = uid;
         if (vatNumber !== undefined)
             updateData.vat_number = vatNumber;
         if (paymentTerms !== undefined)
@@ -346,9 +350,113 @@ exports.getCustomerStats = (0, errorHandler_1.asyncHandler)(async (req, res) => 
     }
 });
 exports.importCustomers = (0, errorHandler_1.asyncHandler)(async (req, res) => {
-    res.status(501).json({
-        success: false,
-        error: 'CSV import not implemented yet'
-    });
+    const companyId = req.user?.companyId;
+    if (!companyId) {
+        res.status(401).json({
+            success: false,
+            error: 'Authentication required'
+        });
+        return;
+    }
+    const { customers: customerData } = req.body;
+    if (!customerData || !Array.isArray(customerData)) {
+        res.status(400).json({
+            success: false,
+            error: 'Invalid CSV data format. Expected array of customer objects.'
+        });
+        return;
+    }
+    try {
+        const results = {
+            imported: 0,
+            failed: 0,
+            errors: []
+        };
+        const { data: lastCustomer, error: numberError } = await supabase_1.db.customers()
+            .select('customer_number')
+            .eq('company_id', companyId)
+            .order('customer_number', { ascending: false })
+            .limit(1)
+            .single();
+        let currentNumber = 1000;
+        if (!numberError && lastCustomer) {
+            currentNumber = parseInt(lastCustomer.customer_number) || 1000;
+        }
+        for (let i = 0; i < customerData.length; i++) {
+            const customer = customerData[i];
+            try {
+                if (!customer.name || customer.name.length < 2) {
+                    results.errors.push(`Row ${i + 1}: Name is required (min 2 characters)`);
+                    results.failed++;
+                    continue;
+                }
+                if (!customer.address || customer.address.length < 5) {
+                    results.errors.push(`Row ${i + 1}: Address is required (min 5 characters)`);
+                    results.failed++;
+                    continue;
+                }
+                if (!customer.zip || customer.zip.length < 4) {
+                    results.errors.push(`Row ${i + 1}: ZIP is required (min 4 characters)`);
+                    results.failed++;
+                    continue;
+                }
+                if (!customer.city || customer.city.length < 2) {
+                    results.errors.push(`Row ${i + 1}: City is required (min 2 characters)`);
+                    results.failed++;
+                    continue;
+                }
+                currentNumber++;
+                const customerNumber = currentNumber.toString();
+                const customerData = {
+                    company_id: companyId,
+                    customer_number: customerNumber,
+                    name: customer.name,
+                    company: customer.company || null,
+                    email: customer.email || null,
+                    address: customer.address,
+                    zip: customer.zip,
+                    city: customer.city,
+                    country: customer.country || 'CH',
+                    phone: customer.phone || null,
+                    uid: customer.uid || null,
+                    vat_number: customer.vatNumber || null,
+                    payment_terms: customer.paymentTerms || 30,
+                    credit_limit: customer.creditLimit || null,
+                    is_active: customer.isActive !== undefined ? customer.isActive : true,
+                    notes: customer.notes || null,
+                    language: customer.language || 'de'
+                };
+                const { data, error } = await supabase_1.db.customers()
+                    .insert(customerData)
+                    .select()
+                    .single();
+                if (error) {
+                    results.errors.push(`Row ${i + 1}: ${error.message}`);
+                    results.failed++;
+                    currentNumber--;
+                }
+                else {
+                    results.imported++;
+                }
+            }
+            catch (error) {
+                results.errors.push(`Row ${i + 1}: ${error.message}`);
+                results.failed++;
+                currentNumber--;
+            }
+        }
+        res.json({
+            success: true,
+            message: `Import completed. ${results.imported} customers imported, ${results.failed} failed.`,
+            data: {
+                imported: results.imported,
+                failed: results.failed,
+                errors: results.errors
+            }
+        });
+    }
+    catch (error) {
+        (0, supabase_1.handleSupabaseError)(error, 'import customers');
+    }
 });
 //# sourceMappingURL=customerController.js.map

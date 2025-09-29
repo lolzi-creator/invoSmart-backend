@@ -4,7 +4,10 @@ export declare const getInvoice: (req: Request, res: Response, next: import("exp
 export declare const createInvoice: (req: Request, res: Response, next: import("express").NextFunction) => void;
 export declare const updateInvoiceStatus: (req: Request, res: Response, next: import("express").NextFunction) => void;
 export declare const getInvoiceStats: (req: Request, res: Response, next: import("express").NextFunction) => void;
+export declare const generateInvoiceQR: (req: Request, res: Response, next: import("express").NextFunction) => void;
 export declare const generateInvoicePdf: (req: Request, res: Response, next: import("express").NextFunction) => void;
+export declare const sendInvoiceReminder: (req: Request, res: Response, next: import("express").NextFunction) => void;
+export declare const generateReminderPdf: (req: Request, res: Response, next: import("express").NextFunction) => void;
 export declare const updateInvoice: (req: Request, res: Response, next: import("express").NextFunction) => void;
 export declare const deleteInvoice: (req: Request, res: Response, next: import("express").NextFunction) => void;
 //# sourceMappingURL=invoiceController.d.ts.map

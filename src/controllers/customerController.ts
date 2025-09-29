@@ -614,11 +614,3 @@ export const importCustomers = asyncHandler(async (req: AuthenticatedRequest, re
     handleSupabaseError(error, 'import customers')
   }
 })
-
-  // This would need multer middleware for file upload
-  // For now, return placeholder
-  res.status(501).json({
-    success: false,
-    error: 'CSV import not implemented yet'
-  })
-})

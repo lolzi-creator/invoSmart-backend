@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deletePayment = exports.updatePayment = exports.getPaymentStats = exports.importPayments = exports.matchPayment = exports.createPayment = exports.getPayment = exports.getPayments = void 0;
+exports.deletePayment = exports.updatePayment = exports.getPaymentStats = exports.debugPaymentMatching = exports.importPayments = exports.matchPayment = exports.createPayment = exports.getPayment = exports.getPayments = void 0;
 const errorHandler_1 = require("../middleware/errorHandler");
 const supabase_1 = require("../lib/supabase");
 const createPaymentResponse = (dbPayment) => {
@@ -23,12 +23,23 @@ const createPaymentResponse = (dbPayment) => {
 };
 const findMatchingInvoice = async (payment, companyId) => {
     if (payment.reference) {
-        const { data: qrInvoice } = await supabase_1.db.invoices()
+        const cleanReference = payment.reference.replace(/\s/g, '');
+        console.log('Looking for QR match:', {
+            paymentReference: cleanReference,
+            companyId: companyId
+        });
+        const { data: qrInvoice, error: qrError } = await supabase_1.db.invoices()
             .select('*')
             .eq('company_id', companyId)
-            .eq('qr_reference', payment.reference.replace(/\s/g, ''))
+            .eq('qr_reference', cleanReference)
             .single();
+        console.log('QR search result:', {
+            found: !!qrInvoice,
+            error: qrError?.message,
+            invoiceNumber: qrInvoice?.number
+        });
         if (qrInvoice) {
+            console.log('HIGH confidence match found:', qrInvoice.number);
             return { invoice: qrInvoice, confidence: 'HIGH' };
         }
     }
@@ -322,7 +333,7 @@ exports.importPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             const { amount, valueDate, reference, description, rawData } = paymentData;
             const newPaymentData = {
                 company_id: companyId,
-                amount: Math.round(amount * 100),
+                amount: amount,
                 value_date: new Date(valueDate).toISOString().split('T')[0],
                 reference: reference || null,
                 description: description || null,
@@ -331,6 +342,12 @@ exports.importPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                 import_batch: importBatch,
                 raw_data: rawData || null
             };
+            console.log('Creating payment:', {
+                amount: amount,
+                amountCHF: amount / 100,
+                reference: reference,
+                valueDate: valueDate
+            });
             const { data: newPayment, error: createError } = await supabase_1.db.payments()
                 .insert(newPaymentData)
                 .select()
@@ -339,7 +356,14 @@ exports.importPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                 console.error('Failed to create payment:', createError);
                 continue;
             }
+            console.log('Attempting to match payment:', newPayment.id, 'with reference:', newPayment.reference);
             const matchResult = await findMatchingInvoice(newPayment, companyId);
+            console.log('Match result:', {
+                found: !!matchResult.invoice,
+                confidence: matchResult.confidence,
+                invoiceId: matchResult.invoice?.id,
+                invoiceNumber: matchResult.invoice?.number
+            });
             if (matchResult.invoice) {
                 const { data: updatedPayment } = await supabase_1.db.payments()
                     .update({
@@ -350,11 +374,17 @@ exports.importPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                     .eq('id', newPayment.id)
                     .select()
                     .single();
+                console.log('Payment matched successfully:', {
+                    paymentId: newPayment.id,
+                    invoiceId: matchResult.invoice.id,
+                    confidence: matchResult.confidence
+                });
                 await updateInvoiceAfterPayment(matchResult.invoice.id);
                 importedPayments.push(createPaymentResponse(updatedPayment));
                 matchedCount.automatic++;
             }
             else {
+                console.log('No match found for payment:', newPayment.id);
                 importedPayments.push(createPaymentResponse(newPayment));
             }
         }
@@ -374,6 +404,65 @@ exports.importPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
     }
     catch (error) {
         (0, supabase_1.handleSupabaseError)(error, 'import payments');
+    }
+});
+exports.debugPaymentMatching = (0, errorHandler_1.asyncHandler)(async (req, res) => {
+    const companyId = req.user?.companyId;
+    if (!companyId) {
+        res.status(401).json({
+            success: false,
+            error: 'Authentication required'
+        });
+        return;
+    }
+    try {
+        const { data: invoices } = await supabase_1.db.invoices()
+            .select('id, number, qr_reference, total, status')
+            .eq('company_id', companyId);
+        const { data: payments } = await supabase_1.db.payments()
+            .select('id, amount, reference, value_date, is_matched, confidence')
+            .eq('company_id', companyId);
+        const debugResults = [];
+        for (const payment of payments || []) {
+            const matchResult = await findMatchingInvoice(payment, companyId);
+            debugResults.push({
+                payment: {
+                    id: payment.id,
+                    amount: payment.amount,
+                    amountCHF: (payment.amount / 100).toFixed(2),
+                    reference: payment.reference,
+                    valueDate: payment.value_date,
+                    isMatched: payment.is_matched,
+                    confidence: payment.confidence
+                },
+                matching: {
+                    found: !!matchResult.invoice,
+                    confidence: matchResult.confidence,
+                    invoiceId: matchResult.invoice?.id,
+                    invoiceNumber: matchResult.invoice?.number,
+                    invoiceTotal: matchResult.invoice?.total,
+                    invoiceTotalCHF: matchResult.invoice ? (matchResult.invoice.total / 100).toFixed(2) : null
+                }
+            });
+        }
+        res.json({
+            success: true,
+            data: {
+                companyId,
+                invoices: (invoices || []).map(inv => ({
+                    id: inv.id,
+                    number: inv.number,
+                    qrReference: inv.qr_reference,
+                    total: inv.total,
+                    totalCHF: (inv.total / 100).toFixed(2),
+                    status: inv.status
+                })),
+                debugResults
+            }
+        });
+    }
+    catch (error) {
+        (0, supabase_1.handleSupabaseError)(error, 'debug payment matching');
     }
 });
 exports.getPaymentStats = (0, errorHandler_1.asyncHandler)(async (req, res) => {

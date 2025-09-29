@@ -1,0 +1,624 @@
+import { Request, Response } from 'express'
+import { asyncHandler } from '../middleware/errorHandler'
+import { AuthenticatedRequest } from '../middleware/auth'
+import {
+  Customer,
+  CustomerStats,
+  ApiResponse
+} from '../types'
+import { 
+  db, 
+  handleSupabaseError, 
+  DatabaseCustomer 
+} from '../lib/supabase'
+
+// Helper function to convert DB customer to API customer
+const createCustomerResponse = (dbCustomer: DatabaseCustomer): Customer => {
+  return {
+    id: dbCustomer.id,
+    companyId: dbCustomer.company_id,
+    customerNumber: dbCustomer.customer_number,
+    name: dbCustomer.name,
+    company: dbCustomer.company || undefined,
+    email: dbCustomer.email || undefined,
+    address: dbCustomer.address,
+    zip: dbCustomer.zip,
+    city: dbCustomer.city,
+    country: dbCustomer.country,
+    phone: dbCustomer.phone || undefined,
+    uid: dbCustomer.uid || undefined,
+    vatNumber: dbCustomer.vat_number || undefined,
+    paymentTerms: dbCustomer.payment_terms,
+    creditLimit: dbCustomer.credit_limit || undefined,
+    isActive: dbCustomer.is_active,
+    notes: dbCustomer.notes || undefined,
+    language: dbCustomer.language,
+    createdAt: new Date(dbCustomer.created_at),
+    updatedAt: new Date(dbCustomer.updated_at)
+  }
+}
+
+// Helper function to ensure company access
+const ensureCompanyAccess = (userCompanyId: string, resourceCompanyId: string) => {
+  if (userCompanyId !== resourceCompanyId) {
+    throw new Error('Access denied to resource')
+  }
+}
+
+/**
+ * @desc    Get all customers
+ * @route   GET /api/v1/customers
+ * @access  Private
+ */
+export const getCustomers = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+  
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  // Parse query parameters
+  const page = parseInt(req.query.page as string) || 1
+  const limit = parseInt(req.query.limit as string) || 10
+  const search = req.query.search as string || ''
+  const sortBy = req.query.sortBy as string || 'name'
+  const sortOrder = req.query.sortOrder as string || 'asc'
+  const isActive = req.query.isActive === 'true' ? true : req.query.isActive === 'false' ? false : undefined
+
+  try {
+    // Build query
+    let query = db.customers()
+      .select('*', { count: 'exact' })
+      .eq('company_id', companyId)
+
+    // Apply filters
+    if (isActive !== undefined) {
+      query = query.eq('is_active', isActive)
+    }
+
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%,city.ilike.%${search}%`)
+    }
+
+    // Apply sorting
+    const ascending = sortOrder === 'asc'
+    query = query.order(sortBy, { ascending })
+
+    // Apply pagination
+    const from = (page - 1) * limit
+    const to = from + limit - 1
+    query = query.range(from, to)
+
+    const { data, error, count } = await query
+
+    if (error) {
+      handleSupabaseError(error, 'get customers')
+      return
+    }
+
+    const customers = (data as DatabaseCustomer[]).map(createCustomerResponse)
+
+    res.json({
+      success: true,
+      data: {
+        customers,
+        pagination: {
+          page,
+          limit,
+          total: count || 0,
+          pages: Math.ceil((count || 0) / limit)
+        }
+      }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'get customers')
+  }
+})
+
+/**
+ * @desc    Get single customer
+ * @route   GET /api/v1/customers/:id
+ * @access  Private
+ */
+export const getCustomer = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+  const customerId = req.params.id
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    const { data, error } = await db.customers()
+      .select('*')
+      .eq('id', customerId)
+      .eq('company_id', companyId)
+      .single()
+
+    if (error || !data) {
+      res.status(404).json({
+        success: false,
+        error: 'Customer not found'
+      })
+      return
+    }
+
+    const customer = createCustomerResponse(data as DatabaseCustomer)
+
+    res.json({
+      success: true,
+      data: { customer }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'get customer')
+  }
+})
+
+/**
+ * @desc    Create new customer
+ * @route   POST /api/v1/customers
+ * @access  Private
+ */
+export const createCustomer = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  const {
+    name,
+    company,
+    email,
+    address,
+    zip,
+    city,
+    country = 'CH',
+    phone,
+    uid,
+    vatNumber,
+    paymentTerms = 30,
+    creditLimit,
+    language = 'de',
+    notes
+  } = req.body
+
+  try {
+    // Generate customer number
+    const { data: customerNumber, error: numberError } = await db.customers()
+      .select('customer_number')
+      .eq('company_id', companyId)
+      .order('customer_number', { ascending: false })
+      .limit(1)
+      .single()
+
+    let nextNumber = '1001'
+    if (!numberError && customerNumber) {
+      const lastNumber = parseInt(customerNumber.customer_number) || 1000
+      nextNumber = (lastNumber + 1).toString()
+    }
+
+    // Create customer
+    const customerData = {
+      company_id: companyId,
+      customer_number: nextNumber,
+      name,
+      company: company || null,
+      email: email || null,
+      address,
+      zip,
+      city,
+      country,
+      phone: phone || null,
+      uid: uid || null,
+      vat_number: vatNumber || null,
+      payment_terms: paymentTerms,
+      credit_limit: creditLimit || null,
+      is_active: true,
+      notes: notes || null,
+      language
+    }
+
+    const { data, error } = await db.customers()
+      .insert(customerData)
+      .select()
+      .single()
+
+    if (error || !data) {
+      handleSupabaseError(error, 'create customer')
+      return
+    }
+
+    const customer = createCustomerResponse(data as DatabaseCustomer)
+
+    res.status(201).json({
+      success: true,
+      message: 'Customer created successfully',
+      data: { customer }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'create customer')
+  }
+})
+
+/**
+ * @desc    Update customer
+ * @route   PUT /api/v1/customers/:id
+ * @access  Private
+ */
+export const updateCustomer = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+  const customerId = req.params.id
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    // Verify customer exists and belongs to company
+    const { data: existingCustomer, error: findError } = await db.customers()
+      .select('*')
+      .eq('id', customerId)
+      .eq('company_id', companyId)
+      .single()
+
+    if (findError || !existingCustomer) {
+      res.status(404).json({
+        success: false,
+        error: 'Customer not found'
+      })
+      return
+    }
+
+    const {
+      name,
+      company,
+      email,
+      address,
+      zip,
+      city,
+      country,
+      phone,
+      uid,
+      vatNumber,
+      paymentTerms,
+      creditLimit,
+      isActive,
+      language,
+      notes
+    } = req.body
+
+    // Prepare update data
+    const updateData: Partial<DatabaseCustomer> = {}
+    
+    if (name !== undefined) updateData.name = name
+    if (company !== undefined) updateData.company = company
+    if (email !== undefined) updateData.email = email
+    if (address !== undefined) updateData.address = address
+    if (zip !== undefined) updateData.zip = zip
+    if (city !== undefined) updateData.city = city
+    if (country !== undefined) updateData.country = country
+    if (phone !== undefined) updateData.phone = phone
+    if (uid !== undefined) updateData.uid = uid
+    if (vatNumber !== undefined) updateData.vat_number = vatNumber
+    if (paymentTerms !== undefined) updateData.payment_terms = paymentTerms
+    if (creditLimit !== undefined) updateData.credit_limit = creditLimit
+    if (isActive !== undefined) updateData.is_active = isActive
+    if (language !== undefined) updateData.language = language
+    if (notes !== undefined) updateData.notes = notes
+
+    // Update customer
+    const { data, error } = await db.customers()
+      .update(updateData)
+      .eq('id', customerId)
+      .eq('company_id', companyId)
+      .select()
+      .single()
+
+    if (error || !data) {
+      handleSupabaseError(error, 'update customer')
+      return
+    }
+
+    const customer = createCustomerResponse(data as DatabaseCustomer)
+
+    res.json({
+      success: true,
+      message: 'Customer updated successfully',
+      data: { customer }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'update customer')
+  }
+})
+
+/**
+ * @desc    Delete customer
+ * @route   DELETE /api/v1/customers/:id
+ * @access  Private
+ */
+export const deleteCustomer = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+  const customerId = req.params.id
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    // Check if customer has any invoices
+    const { data: invoices, error: invoiceError } = await db.invoices()
+      .select('id')
+      .eq('customer_id', customerId)
+      .limit(1)
+
+    if (invoiceError) {
+      handleSupabaseError(invoiceError, 'check customer invoices')
+      return
+    }
+
+    if (invoices && invoices.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Cannot delete customer with existing invoices'
+      })
+      return
+    }
+
+    // Delete customer
+    const { error } = await db.customers()
+      .delete()
+      .eq('id', customerId)
+      .eq('company_id', companyId)
+
+    if (error) {
+      handleSupabaseError(error, 'delete customer')
+      return
+    }
+
+    res.json({
+      success: true,
+      message: 'Customer deleted successfully'
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'delete customer')
+  }
+})
+
+/**
+ * @desc    Get customer statistics
+ * @route   GET /api/v1/customers/stats
+ * @access  Private
+ */
+export const getCustomerStats = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    // Get total customers
+    const { count: totalCustomers, error: totalError } = await db.customers()
+      .select('*', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+
+    if (totalError) {
+      handleSupabaseError(totalError, 'get total customers')
+      return
+    }
+
+    // Get active customers
+    const { count: activeCustomers, error: activeError } = await db.customers()
+      .select('*', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+
+    if (activeError) {
+      handleSupabaseError(activeError, 'get active customers')
+      return
+    }
+
+    // Get customers by country
+    const { data: countryData, error: countryError } = await db.customers()
+      .select('country')
+      .eq('company_id', companyId)
+
+    if (countryError) {
+      handleSupabaseError(countryError, 'get customers by country')
+      return
+    }
+
+    const customersByCountry = (countryData as { country: string }[]).reduce((acc, curr) => {
+      acc[curr.country] = (acc[curr.country] || 0) + 1
+      return acc
+    }, {} as Record<string, number>)
+
+    const stats: CustomerStats = {
+      totalCustomers: totalCustomers || 0,
+      activeCustomers: activeCustomers || 0,
+      inactiveCustomers: (totalCustomers || 0) - (activeCustomers || 0),
+      customersByCountry,
+      recentCustomers: [] // Could be implemented separately if needed
+    }
+
+    res.json({
+      success: true,
+      data: { stats }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'get customer stats')
+  }
+})
+
+/**
+ * @desc    Import customers from CSV
+ * @route   POST /api/v1/customers/import
+ * @access  Private
+ */
+export const importCustomers = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  const { customers: customerData } = req.body
+
+  if (!customerData || !Array.isArray(customerData)) {
+    res.status(400).json({
+      success: false,
+      error: 'Invalid CSV data format. Expected array of customer objects.'
+    })
+    return
+  }
+
+  try {
+    const results = {
+      imported: 0,
+      failed: 0,
+      errors: [] as string[]
+    }
+
+    // Get current highest customer number
+    const { data: lastCustomer, error: numberError } = await db.customers()
+      .select('customer_number')
+      .eq('company_id', companyId)
+      .order('customer_number', { ascending: false })
+      .limit(1)
+      .single()
+
+    let currentNumber = 1000
+    if (!numberError && lastCustomer) {
+      currentNumber = parseInt(lastCustomer.customer_number) || 1000
+    }
+
+    // Process each customer
+    for (let i = 0; i < customerData.length; i++) {
+      const customer = customerData[i]
+      
+      try {
+        // Validate required fields
+        if (!customer.name || customer.name.length < 2) {
+          results.errors.push(`Row ${i + 1}: Name is required (min 2 characters)`)
+          results.failed++
+          continue
+        }
+        if (!customer.address || customer.address.length < 5) {
+          results.errors.push(`Row ${i + 1}: Address is required (min 5 characters)`)
+          results.failed++
+          continue
+        }
+        if (!customer.zip || customer.zip.length < 4) {
+          results.errors.push(`Row ${i + 1}: ZIP is required (min 4 characters)`)
+          results.failed++
+          continue
+        }
+        if (!customer.city || customer.city.length < 2) {
+          results.errors.push(`Row ${i + 1}: City is required (min 2 characters)`)
+          results.failed++
+          continue
+        }
+
+        // Generate next customer number
+        currentNumber++
+        const customerNumber = currentNumber.toString()
+
+        // Prepare customer data
+        const customerData = {
+          company_id: companyId,
+          customer_number: customerNumber,
+          name: customer.name,
+          company: customer.company || null,
+          email: customer.email || null,
+          address: customer.address,
+          zip: customer.zip,
+          city: customer.city,
+          country: customer.country || 'CH',
+          phone: customer.phone || null,
+          uid: customer.uid || null,
+          vat_number: customer.vatNumber || null,
+          payment_terms: customer.paymentTerms || 30,
+          credit_limit: customer.creditLimit || null,
+          is_active: customer.isActive !== undefined ? customer.isActive : true,
+          notes: customer.notes || null,
+          language: customer.language || 'de'
+        }
+
+        // Insert customer
+        const { data, error } = await db.customers()
+          .insert(customerData)
+          .select()
+          .single()
+
+        if (error) {
+          results.errors.push(`Row ${i + 1}: ${error.message}`)
+          results.failed++
+          currentNumber-- // Rollback number
+        } else {
+          results.imported++
+        }
+
+      } catch (error: any) {
+        results.errors.push(`Row ${i + 1}: ${error.message}`)
+        results.failed++
+        currentNumber-- // Rollback number
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Import completed. ${results.imported} customers imported, ${results.failed} failed.`,
+      data: {
+        imported: results.imported,
+        failed: results.failed,
+        errors: results.errors
+      }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'import customers')
+  }
+})
+
+  // This would need multer middleware for file upload
+  // For now, return placeholder
+  res.status(501).json({
+    success: false,
+    error: 'CSV import not implemented yet'
+  })
+})

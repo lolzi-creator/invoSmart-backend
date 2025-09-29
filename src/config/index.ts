@@ -32,6 +32,11 @@ export const config = {
     maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100')
   },
   
+  // CORS
+  cors: {
+    origins: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:3000', 'http://localhost:3001']
+  },
+  
   // Swiss specific
   swiss: {
     defaultCountry: 'CH',

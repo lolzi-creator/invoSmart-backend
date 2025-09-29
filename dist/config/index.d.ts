@@ -18,6 +18,9 @@ export declare const config: {
         windowMs: number;
         maxRequests: number;
     };
+    cors: {
+        origins: string[];
+    };
     swiss: {
         defaultCountry: string;
         supportedLanguages: string[];

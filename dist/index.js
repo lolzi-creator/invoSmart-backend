@@ -35,9 +35,7 @@ app.use((0, helmet_1.default)({
     crossOriginEmbedderPolicy: false,
 }));
 app.use((0, cors_1.default)({
-    origin: config_1.config.nodeEnv === 'production'
-        ? ['https://aesthetic-eclair-60054.netlify.app', 'https://invosmart-frontend.vercel.app', 'https://invosmart-frontend.netlify.app']
-        : ['http://localhost:3000', 'http://localhost:3001'],
+    origin: config_1.config.cors.origins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']

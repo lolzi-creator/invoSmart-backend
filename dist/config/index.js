@@ -27,6 +27,9 @@ exports.config = {
         windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
         maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100')
     },
+    cors: {
+        origins: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:3000', 'http://localhost:3001']
+    },
     swiss: {
         defaultCountry: 'CH',
         supportedLanguages: ['de', 'fr', 'it', 'en'],

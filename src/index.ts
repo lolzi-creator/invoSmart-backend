@@ -43,7 +43,7 @@ app.use(helmet({
 // CORS configuration
 app.use(cors({
   origin: config.nodeEnv === 'production' 
-    ? ['https://your-frontend-domain.com'] 
+    ? ['https://aesthetic-eclair-60054.netlify.app', 'https://invosmart-frontend.vercel.app', 'https://invosmart-frontend.netlify.app'] 
     : ['http://localhost:3000', 'http://localhost:3001'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],

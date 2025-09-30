@@ -40,9 +40,9 @@ const replaceTemplateVariables = (template, data) => {
             .replace(/{{invoiceNumber}}/g, data.invoice.number)
             .replace(/{{invoiceDate}}/g, new Date(data.invoice.date).toLocaleDateString('de-CH'))
             .replace(/{{dueDate}}/g, new Date(data.invoice.due_date).toLocaleDateString('de-CH'))
-            .replace(/{{total}}/g, (data.invoice.total / 100).toFixed(2))
-            .replace(/{{subtotal}}/g, (data.invoice.subtotal / 100).toFixed(2))
-            .replace(/{{vatAmount}}/g, (data.invoice.vat_amount / 100).toFixed(2))
+            .replace(/{{total}}/g, data.invoice.total.toFixed(2))
+            .replace(/{{subtotal}}/g, data.invoice.subtotal.toFixed(2))
+            .replace(/{{vatAmount}}/g, data.invoice.vat_amount.toFixed(2))
             .replace(/{{qrReference}}/g, data.invoice.qr_reference);
     }
     if (data.customer) {

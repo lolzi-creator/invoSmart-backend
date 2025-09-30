@@ -11,6 +11,7 @@ import authRoutes from './routes/auth'
 import customerRoutes from './routes/customers'
 import invoiceRoutes from './routes/invoices'
 import paymentRoutes from './routes/payments'
+import qrRoutes from './routes/qr'
 import emailRoutes from './routes/emails'
 // import customerRoutes from './routes/customers'
 // import invoiceRoutes from './routes/invoices'
@@ -92,6 +93,7 @@ app.use('/api/v1/auth', authRoutes)
 app.use('/api/v1/customers', customerRoutes)
 app.use('/api/v1/invoices', invoiceRoutes)
 app.use('/api/v1/payments', paymentRoutes)
+app.use('/api/v1/qr', qrRoutes)
 app.use('/api/v1/emails', emailRoutes)
 // app.use('/api/v1/customers', customerRoutes)
 // app.use('/api/v1/invoices', invoiceRoutes)

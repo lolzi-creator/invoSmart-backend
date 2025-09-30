@@ -14,6 +14,7 @@ const auth_1 = __importDefault(require("./routes/auth"));
 const customers_1 = __importDefault(require("./routes/customers"));
 const invoices_1 = __importDefault(require("./routes/invoices"));
 const payments_1 = __importDefault(require("./routes/payments"));
+const qr_1 = __importDefault(require("./routes/qr"));
 const emails_1 = __importDefault(require("./routes/emails"));
 const app = (0, express_1.default)();
 try {
@@ -73,6 +74,7 @@ app.use('/api/v1/auth', auth_1.default);
 app.use('/api/v1/customers', customers_1.default);
 app.use('/api/v1/invoices', invoices_1.default);
 app.use('/api/v1/payments', payments_1.default);
+app.use('/api/v1/qr', qr_1.default);
 app.use('/api/v1/emails', emails_1.default);
 app.get('/api/v1/test', (req, res) => {
     res.json({

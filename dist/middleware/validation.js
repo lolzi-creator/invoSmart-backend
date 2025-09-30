@@ -121,6 +121,7 @@ exports.schemas = {
         customerId: joi_1.default.string().optional(),
         date: joi_1.default.date().optional(),
         dueDate: joi_1.default.date().optional(),
+        status: joi_1.default.string().valid('DRAFT', 'SENT', 'PAID', 'OVERDUE').optional(),
         discountCode: joi_1.default.string().optional(),
         discountAmount: joi_1.default.number().min(0).optional(),
         items: joi_1.default.array().items(joi_1.default.object({

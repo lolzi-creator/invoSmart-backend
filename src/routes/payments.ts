@@ -4,10 +4,14 @@ import {
   getPayment,
   createPayment,
   importPayments,
+  importPaymentsCSV,
+  importPaymentsMT940,
+  importPaymentsCAMT053,
   matchPayment,
   deletePayment,
   getPaymentStats,
-  debugPaymentMatching
+  debugPaymentMatching,
+  runAutoMatch
 } from '../controllers/paymentController'
 import { authenticateToken } from '../middleware/auth'
 import { validateRequest, schemas } from '../middleware/validation'
@@ -37,6 +41,34 @@ router.get('/debug', debugPaymentMatching)
  * @access  Private
  */
 router.post('/import', importPayments)
+
+/**
+ * @route   POST /api/v1/payments/import/csv
+ * @desc    Import payments from CSV
+ * @access  Private
+ */
+router.post('/import/csv', importPaymentsCSV)
+
+/**
+ * @route   POST /api/v1/payments/import/mt940
+ * @desc    Import payments from MT940
+ * @access  Private
+ */
+router.post('/import/mt940', importPaymentsMT940)
+
+/**
+ * @route   POST /api/v1/payments/import/camt053
+ * @desc    Import payments from CAMT.053
+ * @access  Private
+ */
+router.post('/import/camt053', importPaymentsCAMT053)
+
+/**
+ * @route   POST /api/v1/payments/auto-match
+ * @desc    Run automatic payment matching
+ * @access  Private
+ */
+router.post('/auto-match', runAutoMatch)
 
 /**
  * @route   GET /api/v1/payments

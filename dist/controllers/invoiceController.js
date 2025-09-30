@@ -78,8 +78,8 @@ const createInvoiceItemResponse = (dbItem) => {
         quantity: dbItem.quantity,
         unit: dbItem.unit,
         unitPrice: dbItem.unit_price,
-        discount: dbItem.discount,
-        vatRate: dbItem.vat_rate,
+        discount: dbItem.discount / 100,
+        vatRate: dbItem.vat_rate / 100,
         lineTotal: dbItem.line_total,
         vatAmount: dbItem.vat_amount,
         sortOrder: dbItem.sort_order
@@ -128,7 +128,7 @@ exports.getInvoices = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             (0, supabase_1.handleSupabaseError)(error, 'get invoices');
             return;
         }
-        const invoices = data.map(invoice => createInvoiceResponse(invoice, invoice.customers));
+        const invoices = data.map(invoice => createInvoiceResponse(invoice, invoice.customers, undefined, invoice.invoiceItems));
         res.json({
             success: true,
             data: {
@@ -162,7 +162,7 @@ exports.getInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         *,
         customers (*),
         companies (*),
-        invoice_items (*)
+        invoiceItems (*)
       `)
             .eq('id', invoiceId)
             .eq('company_id', companyId)
@@ -174,7 +174,7 @@ exports.getInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             });
             return;
         }
-        const invoice = createInvoiceResponse(invoiceData, invoiceData.customers, invoiceData.companies, invoiceData.invoice_items);
+        const invoice = createInvoiceResponse(invoiceData, invoiceData.customers, invoiceData.companies, invoiceData.invoiceItems);
         res.json({
             success: true,
             data: { invoice }
@@ -221,8 +221,8 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         let vatTotal = 0;
         let discountAmount = 0;
         const processedItems = items.map((item, index) => {
-            const lineTotal = Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100));
-            const vatAmount = Math.round(lineTotal * (item.vatRate || 0) / 100);
+            const lineTotal = Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * 100) / 100;
+            const vatAmount = Math.round(lineTotal * (item.vatRate || 0) / 100 * 100) / 100;
             subtotal += lineTotal;
             vatTotal += vatAmount;
             return {
@@ -245,7 +245,7 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                 .eq('is_active', true)
                 .single();
             if (discount) {
-                discountAmount = Math.round(subtotal * discount.percentage / 10000);
+                discountAmount = Math.round(subtotal * discount.percentage / 10000 * 100) / 100;
             }
         }
         const total = subtotal + vatTotal - discountAmount;
@@ -292,11 +292,11 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         *,
         customers (*),
         companies (*),
-        invoice_items (*)
+        invoiceItems (*)
       `)
             .eq('id', newInvoice.id)
             .single();
-        const invoice = createInvoiceResponse(completeInvoice, completeInvoice.customers, completeInvoice.companies, completeInvoice.invoice_items);
+        const invoice = createInvoiceResponse(completeInvoice, completeInvoice.customers, completeInvoice.companies, completeInvoice.invoiceItems);
         res.status(201).json({
             success: true,
             message: 'Invoice created successfully',
@@ -442,7 +442,7 @@ exports.generateInvoiceQR = (0, errorHandler_1.asyncHandler)(async (req, res) =>
                 town: company.city,
                 country: company.country || 'CH'
             },
-            amount: (invoice.total / 100).toFixed(2),
+            amount: invoice.total.toFixed(2),
             currency: 'CHF',
             debtor: {
                 addressType: 'S',
@@ -514,7 +514,7 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
         customers (
           id, name, company, address, zip, city, country, email, phone, uid, vat_number
         ),
-        invoice_items (
+        invoiceItems (
           id, description, quantity, unit, unit_price, discount, vat_rate, line_total, vat_amount, sort_order
         )
       `)
@@ -741,16 +741,16 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
           </tr>
         </thead>
         <tbody>
-          ${invoice.invoice_items?.map((item, index) => `
+          ${invoice.invoiceItems?.map((item, index) => `
             <tr>
               <td>${index + 1}</td>
               <td>${item.description}</td>
-              <td class="number">${(item.quantity / 1000).toFixed(3)}</td>
+              <td class="number">${item.quantity.toFixed(3)}</td>
               <td>${item.unit}</td>
-              <td class="number">${(item.unit_price / 100).toFixed(2)}</td>
+              <td class="number">${item.unit_price.toFixed(2)}</td>
               <td class="number">${(item.discount / 100).toFixed(1)}%</td>
               <td class="number">${(item.vat_rate / 100).toFixed(1)}%</td>
-              <td class="number">${(item.line_total / 100).toFixed(2)}</td>
+              <td class="number">${item.line_total.toFixed(2)}</td>
             </tr>
           `).join('') || '<tr><td colspan="8">No items</td></tr>'}
         </tbody>
@@ -759,10 +759,10 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
       <!-- Totals -->
       <div class="totals">
         <table>
-          <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
-          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${(invoice.discount_amount / 100).toFixed(2)}</td></tr>` : ''}
-          <tr><td>MWST:</td><td>CHF ${(invoice.vat_amount / 100).toFixed(2)}</td></tr>
-          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
+          <tr><td>Zwischensumme:</td><td>CHF ${invoice.subtotal.toFixed(2)}</td></tr>
+          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${invoice.discount_amount.toFixed(2)}</td></tr>` : ''}
+          <tr><td>MWST:</td><td>CHF ${invoice.vat_amount.toFixed(2)}</td></tr>
+          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${invoice.total.toFixed(2)}</strong></td></tr>
         </table>
       </div>
 
@@ -908,10 +908,23 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
                 },
                 printBackground: true,
                 displayHeaderFooter: false,
-                timeout: 10000,
-                args: ['--no-sandbox', '--disable-setuid-sandbox'],
+                timeout: 5000,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
+                    '--run-all-compositor-stages-before-draw',
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding'
+                ],
                 waitForSelector: 'body',
-                omitBackground: false
+                omitBackground: false,
+                preferCSSPageSize: true,
+                emulateMedia: 'print'
             };
             const file = { content: htmlTemplate };
             console.log('Generating PDF with html-pdf-node...');
@@ -1264,7 +1277,7 @@ Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen
       <div class="reminder-fees">
         <h4 style="margin-top: 0;">💰 Mahngebühren</h4>
         <p>Für diese ${template.title} berechnen wir Ihnen eine Bearbeitungsgebühr von <strong>CHF ${template.fee.toFixed(2)}</strong>.</p>
-        <p><strong>Neuer Gesamtbetrag: CHF ${((invoice.total / 100) + template.fee).toFixed(2)}</strong></p>
+        <p><strong>Neuer Gesamtbetrag: CHF ${(invoice.total + template.fee).toFixed(2)}</strong></p>
       </div>
       ` : ''}
 
@@ -1275,7 +1288,7 @@ Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen
           <div>
             <div><strong>IBAN:</strong> ${company.iban || 'CH21 0900 0000 1001 5000 6'}</div>
             <div><strong>Referenz:</strong> ${invoice.qr_reference}</div>
-            <div><strong>Betrag:</strong> CHF ${((invoice.total / 100) + template.fee).toFixed(2)}</div>
+            <div><strong>Betrag:</strong> CHF ${(invoice.total + template.fee).toFixed(2)}</div>
           </div>
           <div>
             <div><strong>Empfänger:</strong> ${company.name}</div>
@@ -1340,10 +1353,114 @@ Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen
     }
 });
 exports.updateInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
-    res.status(501).json({
-        success: false,
-        error: 'Invoice update not implemented yet'
-    });
+    const companyId = req.user?.companyId;
+    const invoiceId = req.params.id;
+    const updateData = req.body;
+    if (!companyId) {
+        res.status(401).json({
+            success: false,
+            error: 'Authentication required'
+        });
+        return;
+    }
+    try {
+        const { data: existingInvoice, error: invoiceError } = await supabase_1.db.invoices()
+            .select('id, company_id')
+            .eq('id', invoiceId)
+            .eq('company_id', companyId)
+            .single();
+        if (invoiceError || !existingInvoice) {
+            res.status(404).json({
+                success: false,
+                error: 'Invoice not found'
+            });
+            return;
+        }
+        const updateFields = {};
+        if (updateData.status) {
+            updateFields.status = updateData.status;
+        }
+        if (updateData.customerId) {
+            updateFields.customer_id = updateData.customerId;
+        }
+        if (updateData.date) {
+            updateFields.date = updateData.date;
+        }
+        if (updateData.dueDate) {
+            updateFields.due_date = updateData.dueDate;
+        }
+        if (updateData.discountCode !== undefined) {
+            updateFields.discount_code = updateData.discountCode;
+        }
+        if (updateData.discountAmount !== undefined) {
+            updateFields.discount_amount = updateData.discountAmount;
+        }
+        const { data: updatedInvoice, error: updateError } = await supabase_1.db.invoices()
+            .update(updateFields)
+            .eq('id', invoiceId)
+            .eq('company_id', companyId)
+            .select('*')
+            .single();
+        if (updateError) {
+            res.status(400).json({
+                success: false,
+                error: 'Failed to update invoice'
+            });
+            return;
+        }
+        if (updateData.items && Array.isArray(updateData.items)) {
+            await supabase_1.db.invoiceItems()
+                .delete()
+                .eq('invoice_id', invoiceId);
+            const itemsToInsert = updateData.items.map((item, index) => ({
+                invoice_id: invoiceId,
+                description: item.description,
+                quantity: item.quantity,
+                unit: item.unit || 'Stück',
+                unit_price: item.unitPrice,
+                discount: (item.discount || 0) * 100,
+                vat_rate: item.vatRate * 100,
+                line_total: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100),
+                vat_amount: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * (item.vatRate / 100),
+                sort_order: index
+            }));
+            const { error: itemsError } = await supabase_1.db.invoiceItems()
+                .insert(itemsToInsert);
+            if (itemsError) {
+                res.status(400).json({
+                    success: false,
+                    error: 'Failed to update invoice items'
+                });
+                return;
+            }
+            const { data: items } = await supabase_1.db.invoiceItems()
+                .select('line_total, vat_amount')
+                .eq('invoice_id', invoiceId);
+            const subtotal = items?.reduce((sum, item) => sum + item.line_total, 0) || 0;
+            const vatAmount = items?.reduce((sum, item) => sum + item.vat_amount, 0) || 0;
+            const total = subtotal + vatAmount - (updateData.discountAmount || 0);
+            await supabase_1.db.invoices()
+                .update({
+                subtotal,
+                vat_amount: vatAmount,
+                total
+            })
+                .eq('id', invoiceId);
+        }
+        res.json({
+            success: true,
+            data: {
+                invoice: createInvoiceResponse(updatedInvoice)
+            }
+        });
+    }
+    catch (error) {
+        console.error('Error updating invoice:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error'
+        });
+    }
 });
 exports.deleteInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
     res.status(501).json({

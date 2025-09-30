@@ -75,17 +75,17 @@ const createInvoiceResponse = (
     date: new Date(dbInvoice.date),
     dueDate: new Date(dbInvoice.due_date),
     status: dbInvoice.status as InvoiceStatus,
-    subtotal: dbInvoice.subtotal,
-    vatAmount: dbInvoice.vat_amount,
-    total: dbInvoice.total,
-    paidAmount: dbInvoice.paid_amount,
+    subtotal: dbInvoice.subtotal, // Already in CHF
+    vatAmount: dbInvoice.vat_amount, // Already in CHF
+    total: dbInvoice.total, // Already in CHF
+    paidAmount: dbInvoice.paid_amount, // Already in CHF
     qrReference: dbInvoice.qr_reference,
     reminderLevel: dbInvoice.reminder_level,
     lastReminderAt: dbInvoice.last_reminder_at ? new Date(dbInvoice.last_reminder_at) : undefined,
     sentAt: dbInvoice.sent_at ? new Date(dbInvoice.sent_at) : undefined,
     emailSentCount: dbInvoice.email_sent_count,
     discountCode: dbInvoice.discount_code || undefined,
-    discountAmount: dbInvoice.discount_amount,
+    discountAmount: dbInvoice.discount_amount, // Already in CHF
     items: items ? items.map(createInvoiceItemResponse) : [],
     payments: [], // Would need to be loaded separately
     createdAt: new Date(dbInvoice.created_at),
@@ -101,11 +101,11 @@ const createInvoiceItemResponse = (dbItem: DatabaseInvoiceItem): InvoiceItem => 
     description: dbItem.description,
     quantity: dbItem.quantity,
     unit: dbItem.unit,
-    unitPrice: dbItem.unit_price,
-    discount: dbItem.discount,
-    vatRate: dbItem.vat_rate,
-    lineTotal: dbItem.line_total,
-    vatAmount: dbItem.vat_amount,
+    unitPrice: dbItem.unit_price, // Already in CHF
+    discount: dbItem.discount / 100, // Convert from basis points to percentage
+    vatRate: dbItem.vat_rate / 100, // Convert from basis points to percentage
+    lineTotal: dbItem.line_total, // Already in CHF
+    vatAmount: dbItem.vat_amount, // Already in CHF
     sortOrder: dbItem.sort_order
   }
 }
@@ -174,7 +174,7 @@ export const getInvoices = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     const invoices = (data as any[]).map(invoice => 
-      createInvoiceResponse(invoice, invoice.customers)
+      createInvoiceResponse(invoice, invoice.customers, undefined, invoice.invoiceItems)
     )
 
     res.json({
@@ -219,7 +219,7 @@ export const getInvoice = asyncHandler(async (req: AuthenticatedRequest, res: Re
         *,
         customers (*),
         companies (*),
-        invoice_items (*)
+        invoiceItems (*)
       `)
       .eq('id', invoiceId)
       .eq('company_id', companyId)
@@ -237,7 +237,7 @@ export const getInvoice = asyncHandler(async (req: AuthenticatedRequest, res: Re
       invoiceData,
       invoiceData.customers,
       invoiceData.companies,
-      invoiceData.invoice_items
+      invoiceData.invoiceItems
     )
 
     res.json({
@@ -317,8 +317,9 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
       discount?: number
       vatRate?: number
     }, index: number) => {
-      const lineTotal = Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100))
-      const vatAmount = Math.round(lineTotal * (item.vatRate || 0) / 100)
+      // Calculate amounts in CHF (no conversion needed)
+      const lineTotal = Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * 100) / 100
+      const vatAmount = Math.round(lineTotal * (item.vatRate || 0) / 100 * 100) / 100
       
       subtotal += lineTotal
       vatTotal += vatAmount
@@ -327,7 +328,7 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
         description: item.description,
         quantity: item.quantity,
         unit: item.unit || 'Stk',
-        unit_price: item.unitPrice,
+        unit_price: item.unitPrice, // Store in CHF
         discount: Math.round((item.discount || 0) * 100), // Convert to basis points
         vat_rate: Math.round((item.vatRate || 0) * 100), // Convert to basis points
         line_total: lineTotal,
@@ -346,7 +347,7 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
         .single()
 
       if (discount) {
-        discountAmount = Math.round(subtotal * discount.percentage / 10000)
+        discountAmount = Math.round(subtotal * discount.percentage / 10000 * 100) / 100
       }
     }
 
@@ -405,7 +406,7 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
         *,
         customers (*),
         companies (*),
-        invoice_items (*)
+        invoiceItems (*)
       `)
       .eq('id', newInvoice.id)
       .single()
@@ -414,7 +415,7 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
       completeInvoice,
       completeInvoice.customers,
       completeInvoice.companies,
-      completeInvoice.invoice_items
+      completeInvoice.invoiceItems
     )
 
     res.status(201).json({
@@ -610,7 +611,7 @@ export const generateInvoiceQR = asyncHandler(async (req: AuthenticatedRequest, 
       },
       
       // Amount
-      amount: (invoice.total / 100).toFixed(2), // Convert Rappen to CHF
+      amount: invoice.total.toFixed(2), // Already in CHF
       currency: 'CHF',
       
       // Debtor (Customer)
@@ -702,7 +703,7 @@ export const generateInvoicePdf = asyncHandler(async (req: AuthenticatedRequest,
         customers (
           id, name, company, address, zip, city, country, email, phone, uid, vat_number
         ),
-        invoice_items (
+        invoiceItems (
           id, description, quantity, unit, unit_price, discount, vat_rate, line_total, vat_amount, sort_order
         )
       `)
@@ -943,16 +944,16 @@ export const generateInvoicePdf = asyncHandler(async (req: AuthenticatedRequest,
           </tr>
         </thead>
         <tbody>
-          ${invoice.invoice_items?.map((item: any, index: number) => `
+          ${invoice.invoiceItems?.map((item: any, index: number) => `
             <tr>
               <td>${index + 1}</td>
               <td>${item.description}</td>
-              <td class="number">${(item.quantity / 1000).toFixed(3)}</td>
+              <td class="number">${item.quantity.toFixed(3)}</td>
               <td>${item.unit}</td>
-              <td class="number">${(item.unit_price / 100).toFixed(2)}</td>
+              <td class="number">${item.unit_price.toFixed(2)}</td>
               <td class="number">${(item.discount / 100).toFixed(1)}%</td>
               <td class="number">${(item.vat_rate / 100).toFixed(1)}%</td>
-              <td class="number">${(item.line_total / 100).toFixed(2)}</td>
+              <td class="number">${item.line_total.toFixed(2)}</td>
             </tr>
           `).join('') || '<tr><td colspan="8">No items</td></tr>'}
         </tbody>
@@ -961,10 +962,10 @@ export const generateInvoicePdf = asyncHandler(async (req: AuthenticatedRequest,
       <!-- Totals -->
       <div class="totals">
         <table>
-          <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
-          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${(invoice.discount_amount / 100).toFixed(2)}</td></tr>` : ''}
-          <tr><td>MWST:</td><td>CHF ${(invoice.vat_amount / 100).toFixed(2)}</td></tr>
-          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
+          <tr><td>Zwischensumme:</td><td>CHF ${invoice.subtotal.toFixed(2)}</td></tr>
+          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${invoice.discount_amount.toFixed(2)}</td></tr>` : ''}
+          <tr><td>MWST:</td><td>CHF ${invoice.vat_amount.toFixed(2)}</td></tr>
+          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${invoice.total.toFixed(2)}</strong></td></tr>
         </table>
       </div>
 
@@ -1114,11 +1115,25 @@ export const generateInvoicePdf = asyncHandler(async (req: AuthenticatedRequest,
         },
         printBackground: true,
         displayHeaderFooter: false,
-        // Optimization options
-        timeout: 10000, // 10 second timeout
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        // Optimized for speed
+        timeout: 5000, // Reduced timeout for faster generation
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-web-security',
+          '--disable-features=VizDisplayCompositor',
+          '--run-all-compositor-stages-before-draw',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding'
+        ],
         waitForSelector: 'body',
-        omitBackground: false
+        omitBackground: false,
+        // Additional speed optimizations
+        preferCSSPageSize: true,
+        emulateMedia: 'print'
       }
       
       const file = { content: htmlTemplate }
@@ -1522,7 +1537,7 @@ Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen
       <div class="reminder-fees">
         <h4 style="margin-top: 0;">💰 Mahngebühren</h4>
         <p>Für diese ${template.title} berechnen wir Ihnen eine Bearbeitungsgebühr von <strong>CHF ${template.fee.toFixed(2)}</strong>.</p>
-        <p><strong>Neuer Gesamtbetrag: CHF ${((invoice.total / 100) + template.fee).toFixed(2)}</strong></p>
+        <p><strong>Neuer Gesamtbetrag: CHF ${(invoice.total + template.fee).toFixed(2)}</strong></p>
       </div>
       ` : ''}
 
@@ -1533,7 +1548,7 @@ Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen
           <div>
             <div><strong>IBAN:</strong> ${company.iban || 'CH21 0900 0000 1001 5000 6'}</div>
             <div><strong>Referenz:</strong> ${invoice.qr_reference}</div>
-            <div><strong>Betrag:</strong> CHF ${((invoice.total / 100) + template.fee).toFixed(2)}</div>
+            <div><strong>Betrag:</strong> CHF ${(invoice.total + template.fee).toFixed(2)}</div>
           </div>
           <div>
             <div><strong>Empfänger:</strong> ${company.name}</div>
@@ -1615,11 +1630,141 @@ Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen
  * @access  Private
  */
 export const updateInvoice = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  // Invoice update logic would be implemented here
-  res.status(501).json({
-    success: false,
-    error: 'Invoice update not implemented yet'
-  })
+  const companyId = req.user?.companyId
+  const invoiceId = req.params.id
+  const updateData = req.body
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    // Check if invoice exists and belongs to company
+    const { data: existingInvoice, error: invoiceError } = await db.invoices()
+      .select('id, company_id')
+      .eq('id', invoiceId)
+      .eq('company_id', companyId)
+      .single()
+
+    if (invoiceError || !existingInvoice) {
+      res.status(404).json({
+        success: false,
+        error: 'Invoice not found'
+      })
+      return
+    }
+
+    // Prepare update data
+    const updateFields: any = {}
+    
+    if (updateData.status) {
+      updateFields.status = updateData.status
+    }
+    
+    if (updateData.customerId) {
+      updateFields.customer_id = updateData.customerId
+    }
+    
+    if (updateData.date) {
+      updateFields.date = updateData.date
+    }
+    
+    if (updateData.dueDate) {
+      updateFields.due_date = updateData.dueDate
+    }
+    
+    if (updateData.discountCode !== undefined) {
+      updateFields.discount_code = updateData.discountCode
+    }
+    
+    if (updateData.discountAmount !== undefined) {
+      updateFields.discount_amount = updateData.discountAmount
+    }
+
+    // Update invoice
+    const { data: updatedInvoice, error: updateError } = await db.invoices()
+      .update(updateFields)
+      .eq('id', invoiceId)
+      .eq('company_id', companyId)
+      .select('*')
+      .single()
+
+    if (updateError) {
+      res.status(400).json({
+        success: false,
+        error: 'Failed to update invoice'
+      })
+      return
+    }
+
+    // If items are provided, update them
+    if (updateData.items && Array.isArray(updateData.items)) {
+      // Delete existing items
+      await db.invoiceItems()
+        .delete()
+        .eq('invoice_id', invoiceId)
+
+      // Insert new items
+      const itemsToInsert = updateData.items.map((item: any, index: number) => ({
+        invoice_id: invoiceId,
+        description: item.description,
+        quantity: item.quantity,
+        unit: item.unit || 'Stück',
+        unit_price: item.unitPrice,
+        discount: (item.discount || 0) * 100, // Convert to basis points
+        vat_rate: item.vatRate * 100, // Convert to basis points
+        line_total: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100),
+        vat_amount: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * (item.vatRate / 100),
+        sort_order: index
+      }))
+
+      const { error: itemsError } = await db.invoiceItems()
+        .insert(itemsToInsert)
+
+      if (itemsError) {
+        res.status(400).json({
+          success: false,
+          error: 'Failed to update invoice items'
+        })
+        return
+      }
+
+      // Recalculate totals
+      const { data: items } = await db.invoiceItems()
+        .select('line_total, vat_amount')
+        .eq('invoice_id', invoiceId)
+
+      const subtotal = items?.reduce((sum: number, item: any) => sum + item.line_total, 0) || 0
+      const vatAmount = items?.reduce((sum: number, item: any) => sum + item.vat_amount, 0) || 0
+      const total = subtotal + vatAmount - (updateData.discountAmount || 0)
+
+      // Update totals
+      await db.invoices()
+        .update({
+          subtotal,
+          vat_amount: vatAmount,
+          total
+        })
+        .eq('id', invoiceId)
+    }
+
+    res.json({
+      success: true,
+      data: {
+        invoice: createInvoiceResponse(updatedInvoice)
+      }
+    })
+  } catch (error: any) {
+    console.error('Error updating invoice:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    })
+  }
 })
 
 /**

@@ -149,6 +149,7 @@ export const schemas = {
     customerId: Joi.string().optional(),
     date: Joi.date().optional(),
     dueDate: Joi.date().optional(),
+    status: Joi.string().valid('DRAFT', 'SENT', 'PAID', 'OVERDUE').optional(),
     discountCode: Joi.string().optional(),
     discountAmount: Joi.number().min(0).optional(),
     items: Joi.array().items(

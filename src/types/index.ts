@@ -1,4 +1,5 @@
 // Base Types for Swiss Invoice System
+import { Request } from 'express'
 
 export interface Company {
   id: string
@@ -77,8 +78,10 @@ export interface Invoice {
   emailSentCount: number
   discountCode?: string
   discountAmount: number // in Rappen
+  internalNotes?: string // Internal notes/comments for the invoice
   items: InvoiceItem[]
   payments: Payment[]
+  files?: InvoiceFile[]
   createdAt: Date
   updatedAt: Date
 }
@@ -103,6 +106,16 @@ export interface InvoiceItem {
   lineTotal: number // in Rappen
   vatAmount: number // in Rappen
   sortOrder: number
+}
+
+export interface InvoiceFile {
+  id: string
+  invoiceId: string
+  fileName: string
+  filePath: string
+  fileSize: number
+  mimeType: string
+  uploadedAt: Date
 }
 
 export interface Payment {
@@ -239,6 +252,85 @@ export interface PaginatedResponse<T> {
   page: number
   limit: number
   totalPages: number
+}
+
+// Database Types (Supabase)
+export interface DatabaseCompany {
+  id: string
+  name: string
+  address: string
+  zip: string
+  city: string
+  country: string
+  phone?: string
+  email: string
+  website?: string
+  uid?: string
+  vat_number?: string
+  iban?: string
+  qr_iban?: string
+  logo_url?: string
+  default_payment_terms: number
+  default_language: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DatabaseCustomer {
+  id: string
+  company_id: string
+  customer_number: string
+  name: string
+  company?: string
+  email?: string
+  address: string
+  zip: string
+  city: string
+  country: string
+  phone?: string
+  uid?: string
+  vat_number?: string
+  payment_terms: number
+  credit_limit?: number
+  is_active: boolean
+  notes?: string
+  language: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DatabaseInvoice {
+  id: string
+  number: string
+  customer_id: string
+  company_id: string
+  date: string
+  due_date: string
+  status: string
+  subtotal: number
+  vat_amount: number
+  total: number
+  paid_amount: number
+  qr_reference: string
+  reminder_level: number
+  last_reminder_at?: string
+  sent_at?: string
+  email_sent_count: number
+  discount_code?: string
+  discount_amount: number
+  created_at: string
+  updated_at: string
+}
+
+// Extended Request type with user
+export interface AuthenticatedRequest extends Request {
+  user?: {
+    id: string
+    name: string
+    email: string
+    companyId: string
+    role: string
+  }
 }
 
 // Error Types

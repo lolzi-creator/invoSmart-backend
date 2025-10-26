@@ -1,24 +1,43 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
-const emailController_1 = require("../controllers/emailController");
 const auth_1 = require("../middleware/auth");
-const validation_1 = require("../middleware/validation");
+const emailController_1 = require("../controllers/emailController");
+console.log('📧 Loading email routes...');
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticateToken);
-router.get('/templates', emailController_1.getEmailTemplates);
-router.post('/templates', (0, validation_1.validateRequest)({ body: validation_1.schemas.createEmailTemplate }), emailController_1.createEmailTemplate);
-router.put('/templates/:id', (0, validation_1.validateRequest)({
-    params: validation_1.schemas.id,
-    body: validation_1.schemas.updateEmailTemplate
-}), emailController_1.updateEmailTemplate);
-router.delete('/templates/:id', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), emailController_1.deleteEmailTemplate);
-router.post('/invoice/:invoiceId', (0, validation_1.validateRequest)({
-    body: validation_1.schemas.sendEmail
-}), emailController_1.sendInvoiceEmail);
-router.post('/reminder/:invoiceId', (0, validation_1.validateRequest)({
-    body: validation_1.schemas.sendReminder
-}), emailController_1.sendReminderEmail);
-router.get('/preview/:invoiceId', emailController_1.previewEmail);
+router.post('/reminder', emailController_1.sendInvoiceReminder);
+router.post('/notification', emailController_1.sendInvoiceNotification);
+router.post('/bulk-reminders', emailController_1.sendBulkReminders);
+router.post('/test', emailController_1.testEmail);
+router.get('/templates', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Email templates endpoint - coming soon',
+        data: []
+    });
+});
+router.post('/invoice/:invoiceId', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Send invoice email - coming soon',
+        data: null
+    });
+});
+router.post('/reminder/:invoiceId', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Send reminder email - coming soon',
+        data: null
+    });
+});
+router.get('/preview/:invoiceId', (req, res) => {
+    res.json({
+        success: true,
+        message: 'Preview email - coming soon',
+        data: null
+    });
+});
+console.log('📧 Email routes loaded successfully!');
 exports.default = router;
 //# sourceMappingURL=emails.js.map

@@ -12,3 +12,9 @@ router.post('/test', generateTestQR)
 export default router
 
 
+
+
+
+
+
+

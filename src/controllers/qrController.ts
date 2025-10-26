@@ -1,6 +1,6 @@
 import { Response } from 'express'
 import { asyncHandler } from '../middleware/errorHandler'
-import { AuthenticatedRequest } from '../middleware/auth'
+import { AuthenticatedRequest } from '../types'
 import { db, handleSupabaseError } from '../lib/supabase'
 
 // Generate a Swiss SIX-compliant QR from company data only (test mode)
@@ -76,5 +76,11 @@ export const generateTestQR = asyncHandler(async (req: AuthenticatedRequest, res
 })
 
 export default generateTestQR
+
+
+
+
+
+
 
 

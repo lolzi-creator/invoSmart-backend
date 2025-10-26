@@ -9,9 +9,6 @@ router.use(auth_1.authenticateToken);
 router.get('/stats', invoiceController_1.getInvoiceStats);
 router.get('/', invoiceController_1.getInvoices);
 router.post('/', (0, validation_1.validateRequest)({ body: validation_1.schemas.createInvoice }), invoiceController_1.createInvoice);
-router.get('/:id', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.getInvoice);
-router.put('/:id', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.updateInvoice);
-router.delete('/:id', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.deleteInvoice);
 router.patch('/:id/status', (0, validation_1.validateRequest)({
     params: validation_1.schemas.id,
     body: validation_1.schemas.updateInvoiceStatus
@@ -20,5 +17,11 @@ router.get('/:id/qr', (0, validation_1.validateRequest)({ params: validation_1.s
 router.get('/:id/pdf', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.generateInvoicePdf);
 router.post('/:id/reminder', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.sendInvoiceReminder);
 router.get('/:id/reminder-pdf/:level', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.generateReminderPdf);
+router.get('/:id', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.getInvoice);
+router.put('/:id', (0, validation_1.validateRequest)({
+    params: validation_1.schemas.id,
+    body: validation_1.schemas.updateInvoice
+}), invoiceController_1.updateInvoice);
+router.delete('/:id', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), invoiceController_1.deleteInvoice);
 exports.default = router;
 //# sourceMappingURL=invoices.js.map

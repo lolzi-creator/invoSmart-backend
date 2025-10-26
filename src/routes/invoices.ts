@@ -42,27 +42,6 @@ router.get('/', getInvoices)
 router.post('/', validateRequest({ body: schemas.createInvoice }), createInvoice)
 
 /**
- * @route   GET /api/v1/invoices/:id
- * @desc    Get invoice by ID
- * @access  Private
- */
-router.get('/:id', validateRequest({ params: schemas.id }), getInvoice)
-
-/**
- * @route   PUT /api/v1/invoices/:id
- * @desc    Update invoice
- * @access  Private
- */
-router.put('/:id', validateRequest({ params: schemas.id }), updateInvoice)
-
-/**
- * @route   DELETE /api/v1/invoices/:id
- * @desc    Delete invoice
- * @access  Private
- */
-router.delete('/:id', validateRequest({ params: schemas.id }), deleteInvoice)
-
-/**
  * @route   PATCH /api/v1/invoices/:id/status
  * @desc    Update invoice status
  * @access  Private
@@ -99,5 +78,29 @@ router.post('/:id/reminder', validateRequest({ params: schemas.id }), sendInvoic
  * @access  Private
  */
 router.get('/:id/reminder-pdf/:level', validateRequest({ params: schemas.id }), generateReminderPdf)
+
+/**
+ * @route   GET /api/v1/invoices/:id
+ * @desc    Get invoice by ID
+ * @access  Private
+ */
+router.get('/:id', validateRequest({ params: schemas.id }), getInvoice)
+
+/**
+ * @route   PUT /api/v1/invoices/:id
+ * @desc    Update invoice
+ * @access  Private
+ */
+router.put('/:id', validateRequest({ 
+  params: schemas.id,
+  body: schemas.updateInvoice 
+}), updateInvoice)
+
+/**
+ * @route   DELETE /api/v1/invoices/:id
+ * @desc    Delete invoice
+ * @access  Private
+ */
+router.delete('/:id', validateRequest({ params: schemas.id }), deleteInvoice)
 
 export default router

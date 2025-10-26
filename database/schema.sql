@@ -132,6 +132,7 @@ CREATE TABLE invoices (
   email_sent_count INTEGER NOT NULL DEFAULT 0,
   discount_code VARCHAR(50),
   discount_amount BIGINT NOT NULL DEFAULT 0, -- in Rappen
+  internal_notes TEXT, -- Internal notes/comments for the invoice
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   

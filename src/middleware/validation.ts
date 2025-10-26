@@ -152,6 +152,7 @@ export const schemas = {
     status: Joi.string().valid('DRAFT', 'SENT', 'PAID', 'OVERDUE').optional(),
     discountCode: Joi.string().optional(),
     discountAmount: Joi.number().min(0).optional(),
+    internalNotes: Joi.string().allow('').optional(),
     items: Joi.array().items(
       Joi.object({
         description: Joi.string().min(1).max(500).required(),

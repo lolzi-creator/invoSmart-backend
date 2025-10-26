@@ -10,6 +10,7 @@ export declare const db: {
     vatRates: () => import("@supabase/postgrest-js").PostgrestQueryBuilder<any, any, any, "vat_rates", unknown>;
     discountCodes: () => import("@supabase/postgrest-js").PostgrestQueryBuilder<any, any, any, "discount_codes", unknown>;
     emailTemplates: () => import("@supabase/postgrest-js").PostgrestQueryBuilder<any, any, any, "email_templates", unknown>;
+    expenses: () => import("@supabase/postgrest-js").PostgrestQueryBuilder<any, any, any, "expenses", unknown>;
     invoiceOverview: () => import("@supabase/postgrest-js").PostgrestQueryBuilder<any, any, any, "invoice_overview", unknown>;
     paymentStats: () => import("@supabase/postgrest-js").PostgrestQueryBuilder<any, any, any, "payment_stats", unknown>;
 };
@@ -88,6 +89,7 @@ export interface DatabaseInvoice {
     email_sent_count: number;
     discount_code?: string;
     discount_amount: number;
+    internal_notes?: string;
     created_at: string;
     updated_at: string;
 }
@@ -130,6 +132,33 @@ export interface DatabaseEmailTemplate {
     type: 'INVOICE' | 'REMINDER_1' | 'REMINDER_2' | 'REMINDER_3';
     language: string;
     is_active: boolean;
+    created_at: string;
+    updated_at: string;
+}
+export interface ExpenseAttachment {
+    id: string;
+    expense_id: string;
+    filename: string;
+    originalName: string;
+    filePath: string;
+    fileSize: number;
+    mimeType: string;
+    uploadedAt: string;
+}
+export interface DatabaseExpense {
+    id: string;
+    company_id: string;
+    user_id: string;
+    category: string;
+    description: string;
+    amount: number;
+    currency: string;
+    payment_date: string;
+    status: 'PENDING' | 'APPROVED' | 'REJECTED';
+    approved_by?: string;
+    approved_at?: string;
+    rejection_reason?: string;
+    attachments?: ExpenseAttachment[];
     created_at: string;
     updated_at: string;
 }

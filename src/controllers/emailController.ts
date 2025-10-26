@@ -1,318 +1,24 @@
-import { Request, Response } from 'express'
-import nodemailer from 'nodemailer'
-import { asyncHandler } from '../middleware/errorHandler'
-import { AuthenticatedRequest } from '../middleware/auth'
-import {
-  EmailTemplate,
-  EmailType,
-  ApiResponse
-} from '../types'
-import { 
-  db, 
-  handleSupabaseError, 
-  DatabaseEmailTemplate,
-  DatabaseInvoice,
-  DatabaseCustomer,
-  DatabaseCompany
-} from '../lib/supabase'
-import { config } from '../config'
+import { Response } from 'express'
+import { supabase } from '../lib/supabase'
+import EmailService from '../services/emailService'
+import { DatabaseInvoice, DatabaseCustomer, DatabaseCompany, AuthenticatedRequest } from '../types'
 
-// Helper function to convert DB email template to API email template
-const createEmailTemplateResponse = (dbTemplate: DatabaseEmailTemplate): EmailTemplate => {
-  return {
-    id: dbTemplate.id,
-    companyId: dbTemplate.company_id,
-    name: dbTemplate.name,
-    subject: dbTemplate.subject,
-    body: dbTemplate.body,
-    type: dbTemplate.type as EmailType,
-    language: dbTemplate.language,
-    isActive: dbTemplate.is_active,
-    createdAt: new Date(dbTemplate.created_at),
-    updatedAt: new Date(dbTemplate.updated_at)
-  }
-}
-
-// Helper function to create nodemailer transporter
-const createTransporter = () => {
-  return nodemailer.createTransport({
-    host: config.smtp.host,
-    port: config.smtp.port,
-    secure: config.smtp.port === 465,
-    auth: {
-      user: config.smtp.user,
-      pass: config.smtp.pass
-    }
-  })
-}
-
-// Helper function to replace template variables
-const replaceTemplateVariables = (
-  template: string,
-  data: {
-    invoice?: DatabaseInvoice
-    customer?: DatabaseCustomer
-    company?: DatabaseCompany
-    [key: string]: any
-  }
-): string => {
-  let result = template
-
-  if (data.invoice) {
-    result = result
-      .replace(/{{invoiceNumber}}/g, data.invoice.number)
-      .replace(/{{invoiceDate}}/g, new Date(data.invoice.date).toLocaleDateString('de-CH'))
-      .replace(/{{dueDate}}/g, new Date(data.invoice.due_date).toLocaleDateString('de-CH'))
-      .replace(/{{total}}/g, data.invoice.total.toFixed(2))
-      .replace(/{{subtotal}}/g, data.invoice.subtotal.toFixed(2))
-      .replace(/{{vatAmount}}/g, data.invoice.vat_amount.toFixed(2))
-      .replace(/{{qrReference}}/g, data.invoice.qr_reference)
-  }
-
-  if (data.customer) {
-    result = result
-      .replace(/{{customerName}}/g, data.customer.name)
-      .replace(/{{customerCompany}}/g, data.customer.company || '')
-      .replace(/{{customerAddress}}/g, data.customer.address)
-      .replace(/{{customerZip}}/g, data.customer.zip)
-      .replace(/{{customerCity}}/g, data.customer.city)
-  }
-
-  if (data.company) {
-    result = result
-      .replace(/{{companyName}}/g, data.company.name)
-      .replace(/{{companyAddress}}/g, data.company.address)
-      .replace(/{{companyZip}}/g, data.company.zip)
-      .replace(/{{companyCity}}/g, data.company.city)
-      .replace(/{{companyPhone}}/g, data.company.phone || '')
-      .replace(/{{companyEmail}}/g, data.company.email)
-      .replace(/{{companyWebsite}}/g, data.company.website || '')
-  }
-
-  return result
-}
-
-/**
- * @desc    Get all email templates
- * @route   GET /api/v1/emails/templates
- * @access  Private
- */
-export const getEmailTemplates = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const companyId = req.user?.companyId
-  
-  if (!companyId) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required'
-    })
-    return
-  }
-
+export const sendInvoiceReminder = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { data, error } = await db.emailTemplates()
-      .select('*')
-      .eq('company_id', companyId)
-      .order('name', { ascending: true })
+    const { invoiceId, reminderLevel = 1 } = req.body
+    const companyId = req.user?.companyId
 
-    if (error) {
-      handleSupabaseError(error, 'get email templates')
-      return
+    if (!companyId) {
+      return res.status(401).json({ error: 'Company ID required' })
     }
 
-    const templates = (data as DatabaseEmailTemplate[]).map(createEmailTemplateResponse)
-
-    res.json({
-      success: true,
-      data: { templates }
-    })
-
-  } catch (error) {
-    handleSupabaseError(error, 'get email templates')
-  }
-})
-
-/**
- * @desc    Create email template
- * @route   POST /api/v1/emails/templates
- * @access  Private
- */
-export const createEmailTemplate = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const companyId = req.user?.companyId
-
-  if (!companyId) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required'
-    })
-    return
-  }
-
-  const {
-    name,
-    subject,
-    body,
-    type,
-    language = 'de'
-  } = req.body
-
-  try {
-    const templateData = {
-      company_id: companyId,
-      name,
-      subject,
-      body,
-      type,
-      language,
-      is_active: true
+    if (!invoiceId) {
+      return res.status(400).json({ error: 'Invoice ID required' })
     }
 
-    const { data, error } = await db.emailTemplates()
-      .insert(templateData)
-      .select()
-      .single()
-
-    if (error || !data) {
-      handleSupabaseError(error, 'create email template')
-      return
-    }
-
-    const template = createEmailTemplateResponse(data as DatabaseEmailTemplate)
-
-    res.status(201).json({
-      success: true,
-      message: 'Email template created successfully',
-      data: { template }
-    })
-
-  } catch (error) {
-    handleSupabaseError(error, 'create email template')
-  }
-})
-
-/**
- * @desc    Update email template
- * @route   PUT /api/v1/emails/templates/:id
- * @access  Private
- */
-export const updateEmailTemplate = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const companyId = req.user?.companyId
-  const templateId = req.params.id
-
-  if (!companyId) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required'
-    })
-    return
-  }
-
-  const {
-    name,
-    subject,
-    body,
-    type,
-    language,
-    isActive
-  } = req.body
-
-  try {
-    // Prepare update data
-    const updateData: Partial<DatabaseEmailTemplate> = {}
-    
-    if (name !== undefined) updateData.name = name
-    if (subject !== undefined) updateData.subject = subject
-    if (body !== undefined) updateData.body = body
-    if (type !== undefined) updateData.type = type
-    if (language !== undefined) updateData.language = language
-    if (isActive !== undefined) updateData.is_active = isActive
-
-    const { data, error } = await db.emailTemplates()
-      .update(updateData)
-      .eq('id', templateId)
-      .eq('company_id', companyId)
-      .select()
-      .single()
-
-    if (error || !data) {
-      res.status(404).json({
-        success: false,
-        error: 'Email template not found'
-      })
-      return
-    }
-
-    const template = createEmailTemplateResponse(data as DatabaseEmailTemplate)
-
-    res.json({
-      success: true,
-      message: 'Email template updated successfully',
-      data: { template }
-    })
-
-  } catch (error) {
-    handleSupabaseError(error, 'update email template')
-  }
-})
-
-/**
- * @desc    Delete email template
- * @route   DELETE /api/v1/emails/templates/:id
- * @access  Private
- */
-export const deleteEmailTemplate = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const companyId = req.user?.companyId
-  const templateId = req.params.id
-
-  if (!companyId) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required'
-    })
-    return
-  }
-
-  try {
-    const { error } = await db.emailTemplates()
-      .delete()
-      .eq('id', templateId)
-      .eq('company_id', companyId)
-
-    if (error) {
-      handleSupabaseError(error, 'delete email template')
-      return
-    }
-
-    res.json({
-      success: true,
-      message: 'Email template deleted successfully'
-    })
-
-  } catch (error) {
-    handleSupabaseError(error, 'delete email template')
-  }
-})
-
-/**
- * @desc    Send invoice email
- * @route   POST /api/v1/emails/invoice/:invoiceId
- * @access  Private
- */
-export const sendInvoiceEmail = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const companyId = req.user?.companyId
-  const invoiceId = req.params.invoiceId
-  const { templateId, recipientEmail } = req.body
-
-  if (!companyId) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required'
-    })
-    return
-  }
-
-  try {
     // Get invoice with customer and company data
-    const { data: invoiceData, error: invoiceError } = await db.invoices()
+    const { data: invoice, error: invoiceError } = await supabase
+      .from('invoices')
       .select(`
         *,
         customers (*),
@@ -322,116 +28,72 @@ export const sendInvoiceEmail = asyncHandler(async (req: AuthenticatedRequest, r
       .eq('company_id', companyId)
       .single()
 
-    if (invoiceError || !invoiceData) {
-      res.status(404).json({
-        success: false,
-        error: 'Invoice not found'
-      })
-      return
+    if (invoiceError || !invoice) {
+      return res.status(404).json({ error: 'Invoice not found' })
     }
 
-    // Get email template
-    const { data: template, error: templateError } = await db.emailTemplates()
-      .select('*')
-      .eq('id', templateId)
-      .eq('company_id', companyId)
-      .single()
-
-    if (templateError || !template) {
-      res.status(404).json({
-        success: false,
-        error: 'Email template not found'
-      })
-      return
+    const invoiceData = invoice as DatabaseInvoice & { 
+      customers: DatabaseCustomer
+      companies: DatabaseCompany 
     }
 
-    // Replace template variables
-    const emailSubject = replaceTemplateVariables(template.subject, {
+    // Send reminder email
+    const emailService = new EmailService()
+    const result = await emailService.sendInvoiceReminder({
       invoice: invoiceData,
       customer: invoiceData.customers,
-      company: invoiceData.companies
+      company: invoiceData.companies,
+      reminderLevel
     })
 
-    const emailBody = replaceTemplateVariables(template.body, {
-      invoice: invoiceData,
-      customer: invoiceData.customers,
-      company: invoiceData.companies
-    })
-
-    // Send email
-    const transporter = createTransporter()
-    const recipient = recipientEmail || invoiceData.customers.email
-
-    if (!recipient) {
-      res.status(400).json({
-        success: false,
-        error: 'No recipient email address provided'
-      })
-      return
-    }
-
-    const mailOptions = {
-      from: `"${invoiceData.companies.name}" <${config.smtp.user}>`,
-      to: recipient,
-      subject: emailSubject,
-      text: emailBody,
-      html: emailBody.replace(/\n/g, '<br>')
-    }
-
-    try {
-      await transporter.sendMail(mailOptions)
-
-      // Update invoice email sent count
-      await db.invoices()
-        .update({ 
-          email_sent_count: invoiceData.email_sent_count + 1,
-          sent_at: new Date().toISOString()
+    if (result.success) {
+      // Update reminder level and last reminder date
+      await supabase
+        .from('invoices')
+        .update({
+          reminder_level: reminderLevel,
+          last_reminder_at: new Date().toISOString()
         })
         .eq('id', invoiceId)
 
-      res.json({
-        success: true,
-        message: 'Invoice email sent successfully',
-        data: {
-          recipient,
-          subject: emailSubject
-        }
+      return res.json({ 
+        success: true, 
+        message: 'Reminder sent successfully',
+        data: result 
       })
-
-    } catch (emailError) {
-      console.error('Failed to send email:', emailError)
-      res.status(500).json({
-        success: false,
-        error: 'Failed to send email'
+    } else {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to send reminder',
+        details: result.error 
       })
     }
 
   } catch (error) {
-    handleSupabaseError(error, 'send invoice email')
-  }
-})
-
-/**
- * @desc    Send reminder email
- * @route   POST /api/v1/emails/reminder/:invoiceId
- * @access  Private
- */
-export const sendReminderEmail = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const companyId = req.user?.companyId
-  const invoiceId = req.params.invoiceId
-  const { templateId, recipientEmail } = req.body
-
-  if (!companyId) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required'
+    console.error('Error sending reminder:', error)
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
     })
-    return
   }
+}
 
+export const sendInvoiceNotification = async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const { invoiceId } = req.body
+    const companyId = req.user?.companyId
+
+    if (!companyId) {
+      return res.status(401).json({ error: 'Company ID required' })
+    }
+
+    if (!invoiceId) {
+      return res.status(400).json({ error: 'Invoice ID required' })
+    }
+
     // Get invoice with customer and company data
-    const { data: invoiceData, error: invoiceError } = await db.invoices()
+    const { data: invoice, error: invoiceError } = await supabase
+      .from('invoices')
       .select(`
         *,
         customers (*),
@@ -441,185 +103,217 @@ export const sendReminderEmail = asyncHandler(async (req: AuthenticatedRequest, 
       .eq('company_id', companyId)
       .single()
 
-    if (invoiceError || !invoiceData) {
-      res.status(404).json({
-        success: false,
-        error: 'Invoice not found'
-      })
-      return
+    if (invoiceError || !invoice) {
+      return res.status(404).json({ error: 'Invoice not found' })
     }
 
-    // Check if invoice is overdue or open
-    if (!['OPEN', 'PARTIAL_PAID', 'OVERDUE'].includes(invoiceData.status)) {
-      res.status(400).json({
-        success: false,
-        error: 'Cannot send reminder for paid or cancelled invoice'
-      })
-      return
+    const invoiceData = invoice as DatabaseInvoice & { 
+      customers: DatabaseCustomer
+      companies: DatabaseCompany 
     }
 
-    // Get reminder template
-    const { data: template, error: templateError } = await db.emailTemplates()
-      .select('*')
-      .eq('id', templateId)
-      .eq('company_id', companyId)
-      .single()
-
-    if (templateError || !template) {
-      res.status(404).json({
-        success: false,
-        error: 'Email template not found'
-      })
-      return
-    }
-
-    // Replace template variables
-    const emailSubject = replaceTemplateVariables(template.subject, {
+    // Send notification email
+    const emailService = new EmailService()
+    const result = await emailService.sendInvoiceNotification({
       invoice: invoiceData,
       customer: invoiceData.customers,
       company: invoiceData.companies
     })
 
-    const emailBody = replaceTemplateVariables(template.body, {
-      invoice: invoiceData,
-      customer: invoiceData.customers,
-      company: invoiceData.companies
-    })
-
-    // Send email
-    const transporter = createTransporter()
-    const recipient = recipientEmail || invoiceData.customers.email
-
-    if (!recipient) {
-      res.status(400).json({
-        success: false,
-        error: 'No recipient email address provided'
-      })
-      return
-    }
-
-    const mailOptions = {
-      from: `"${invoiceData.companies.name}" <${config.smtp.user}>`,
-      to: recipient,
-      subject: emailSubject,
-      text: emailBody,
-      html: emailBody.replace(/\n/g, '<br>')
-    }
-
-    try {
-      await transporter.sendMail(mailOptions)
-
-      // Update invoice reminder level and timestamp
-      await db.invoices()
-        .update({ 
-          reminder_level: invoiceData.reminder_level + 1,
-          last_reminder_at: new Date().toISOString(),
-          status: 'OVERDUE' // Mark as overdue after reminder
+    if (result.success) {
+      // Update sent_at timestamp
+      await supabase
+        .from('invoices')
+        .update({
+          sent_at: new Date().toISOString(),
+          email_sent_count: (invoiceData.email_sent_count || 0) + 1
         })
         .eq('id', invoiceId)
 
-      res.json({
-        success: true,
-        message: 'Reminder email sent successfully',
-        data: {
-          recipient,
-          subject: emailSubject,
-          reminderLevel: invoiceData.reminder_level + 1
-        }
+      return res.json({ 
+        success: true, 
+        message: 'Notification sent successfully',
+        data: result 
       })
-
-    } catch (emailError) {
-      console.error('Failed to send reminder email:', emailError)
-      res.status(500).json({
-        success: false,
-        error: 'Failed to send reminder email'
+    } else {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to send notification',
+        details: result.error 
       })
     }
 
   } catch (error) {
-    handleSupabaseError(error, 'send reminder email')
-  }
-})
-
-/**
- * @desc    Preview email content
- * @route   GET /api/v1/emails/preview/:invoiceId
- * @access  Private
- */
-export const previewEmail = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
-  const companyId = req.user?.companyId
-  const invoiceId = req.params.invoiceId
-  const { templateId } = req.query
-
-  if (!companyId) {
-    res.status(401).json({
-      success: false,
-      error: 'Authentication required'
+    console.error('Error sending notification:', error)
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
     })
-    return
   }
+}
 
+export const sendBulkReminders = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    // Get invoice with customer and company data
-    const { data: invoiceData, error: invoiceError } = await db.invoices()
+    const { reminderLevel = 1 } = req.body
+    const companyId = req.user?.companyId
+
+    if (!companyId) {
+      return res.status(401).json({ error: 'Company ID required' })
+    }
+
+    // Get all overdue invoices
+    const { data: invoices, error: invoicesError } = await supabase
+      .from('invoices')
       .select(`
         *,
         customers (*),
         companies (*)
       `)
-      .eq('id', invoiceId)
       .eq('company_id', companyId)
-      .single()
+      .in('status', ['OPEN', 'PARTIAL_PAID'])
+      .lt('due_date', new Date().toISOString().split('T')[0])
 
-    if (invoiceError || !invoiceData) {
-      res.status(404).json({
-        success: false,
-        error: 'Invoice not found'
-      })
-      return
+    if (invoicesError) {
+      return res.status(500).json({ error: 'Failed to fetch invoices' })
     }
 
-    // Get email template
-    const { data: template, error: templateError } = await db.emailTemplates()
-      .select('*')
-      .eq('id', templateId)
-      .eq('company_id', companyId)
-      .single()
-
-    if (templateError || !template) {
-      res.status(404).json({
-        success: false,
-        error: 'Email template not found'
+    if (!invoices || invoices.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'No overdue invoices found',
+        sent: 0 
       })
-      return
     }
 
-    // Replace template variables
-    const previewSubject = replaceTemplateVariables(template.subject, {
-      invoice: invoiceData,
-      customer: invoiceData.customers,
-      company: invoiceData.companies
-    })
+    const emailService = new EmailService()
+    let sentCount = 0
+    const errors: string[] = []
 
-    const previewBody = replaceTemplateVariables(template.body, {
-      invoice: invoiceData,
-      customer: invoiceData.customers,
-      company: invoiceData.companies
-    })
-
-    res.json({
-      success: true,
-      data: {
-        template: createEmailTemplateResponse(template),
-        preview: {
-          subject: previewSubject,
-          body: previewBody,
-          recipient: invoiceData.customers.email || 'Keine E-Mail-Adresse hinterlegt'
+    // Send reminders for each invoice
+    for (const invoice of invoices) {
+      try {
+        const invoiceData = invoice as DatabaseInvoice & { 
+          customers: DatabaseCustomer
+          companies: DatabaseCompany 
         }
+
+        const result = await emailService.sendInvoiceReminder({
+          invoice: invoiceData,
+          customer: invoiceData.customers,
+          company: invoiceData.companies,
+          reminderLevel
+        })
+        
+        if (result.success) {
+          // Update reminder level and last reminder date
+          await supabase
+            .from('invoices')
+            .update({
+              reminder_level: reminderLevel,
+              last_reminder_at: new Date().toISOString()
+            })
+            .eq('id', invoice.id)
+
+          sentCount++
+        } else {
+          errors.push(`Invoice ${invoice.number}: ${result.error}`)
+        }
+      } catch (error) {
+        errors.push(`Invoice ${invoice.number}: ${error}`)
       }
+    }
+
+    return res.json({ 
+      success: true, 
+      message: `Bulk reminders sent: ${sentCount}/${invoices.length}`,
+      sent: sentCount,
+      total: invoices.length,
+      errors: errors.length > 0 ? errors : undefined
     })
 
   } catch (error) {
-    handleSupabaseError(error, 'preview email')
+    console.error('Error sending bulk reminders:', error)
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    })
   }
-})
+}
+
+export const testEmail = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { email } = req.body
+    const companyId = req.user?.companyId
+
+    if (!companyId) {
+      return res.status(401).json({ error: 'Company ID required' })
+    }
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email address required' })
+    }
+
+    // Get company data
+    const { data: company, error: companyError } = await supabase
+      .from('companies')
+      .select('*')
+      .eq('id', companyId)
+      .single()
+
+    if (companyError || !company) {
+      return res.status(404).json({ error: 'Company not found' })
+    }
+
+    // Create test invoice data
+    const testInvoiceData = {
+      id: 'test',
+      number: 'TEST-2025-001',
+      date: new Date().toISOString().split('T')[0],
+      due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      subtotal: 100000, // 1000.00 CHF in Rappen
+      vat_amount: 8000, // 80.00 CHF in Rappen
+      total: 108000, // 1080.00 CHF in Rappen
+      status: 'OPEN',
+      customers: {
+        name: 'Test Customer',
+        email: email,
+        company: 'Test Company Ltd.',
+        language: 'de'
+      },
+      companies: company as DatabaseCompany
+    } as DatabaseInvoice & { 
+      customers: DatabaseCustomer
+      companies: DatabaseCompany 
+    }
+
+    // Send test email
+    const emailService = new EmailService()
+    const result = await emailService.sendInvoiceReminder({
+      invoice: testInvoiceData,
+      customer: testInvoiceData.customers,
+      company: testInvoiceData.companies,
+      reminderLevel: 1
+    })
+
+    if (result.success) {
+      return res.json({ 
+        success: true, 
+        message: 'Test email sent successfully',
+        data: result 
+      })
+    } else {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to send test email',
+        details: result.error 
+      })
+    }
+
+  } catch (error) {
+    console.error('Error sending test email:', error)
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    })
+  }
+}

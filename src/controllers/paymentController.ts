@@ -1,6 +1,6 @@
 import { Request, Response } from 'express'
 import { asyncHandler } from '../middleware/errorHandler'
-import { AuthenticatedRequest } from '../middleware/auth'
+import { AuthenticatedRequest } from '../types'
 import {
   Payment,
   MatchConfidence,
@@ -33,85 +33,259 @@ const createPaymentResponse = (dbPayment: DatabasePayment): Payment => {
   }
 }
 
-// Helper function for payment matching
+// Enhanced matching algorithm with scoring system
+interface MatchScore {
+  invoice: DatabaseInvoice & { customers?: any }
+  score: number
+  maxScore: number
+  criteria: {
+    reference: boolean
+    amount: boolean
+    date: boolean
+    customer: boolean
+  }
+  confidence: MatchConfidence
+}
+
+// Helper function for payment matching with enhanced scoring
 const findMatchingInvoice = async (
   payment: DatabasePayment, 
   companyId: string
 ): Promise<{ invoice?: DatabaseInvoice, confidence: MatchConfidence }> => {
-  // 1. Try exact QR reference match (highest confidence)
+  console.log('Enhanced matching for payment:', {
+    id: payment.id,
+    amount: payment.amount,
+    reference: payment.reference,
+    valueDate: payment.value_date,
+    description: payment.description
+  })
+  
+  console.log('Payment data types:', {
+    amountType: typeof payment.amount,
+    amountValue: payment.amount,
+    referenceType: typeof payment.reference,
+    referenceValue: payment.reference,
+    valueDateType: typeof payment.value_date,
+    valueDateValue: payment.value_date
+  })
+
+  // Get all invoices for this company (including PAID for suggestions)
+  const { data: allInvoices, error: invoicesError } = await db.invoices()
+    .select(`
+      *,
+      customers (
+        id, name, company, email
+      )
+    `)
+    .eq('company_id', companyId)
+    .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE', 'PAID'])
+
+  if (invoicesError || !allInvoices) {
+    console.error('Error fetching invoices:', invoicesError)
+    return { confidence: 'MANUAL' as MatchConfidence }
+  }
+
+  console.log(`Found ${allInvoices.length} open invoices to match against`)
+  
+  // Debug: Log all invoices found
+  console.log('Available invoices for matching:', allInvoices.map(inv => ({
+    id: inv.id,
+    number: inv.number,
+    qr_reference: inv.qr_reference,
+    total: inv.total,
+    due_date: inv.due_date,
+    status: inv.status,
+    customer_id: inv.customer_id,
+    has_customer: !!inv.customers
+  })))
+
+  const matchScores: MatchScore[] = []
+
+  for (const invoice of allInvoices) {
+    const score = calculateMatchScore(payment, invoice as DatabaseInvoice)
+    if (score.score > 0) {
+      matchScores.push(score)
+    }
+  }
+
+  // Sort by score (highest first)
+  matchScores.sort((a, b) => b.score - a.score)
+
+  console.log('Match scores:', matchScores.map(ms => ({
+    invoiceNumber: ms.invoice.number,
+    score: ms.score,
+    maxScore: ms.maxScore,
+    confidence: ms.confidence,
+    criteria: ms.criteria
+  })))
+
+  // Only auto-match if we have a high confidence match (2/3 or more criteria match)
+  const bestMatch = matchScores[0]
+  if (bestMatch && bestMatch.confidence !== MatchConfidence.MANUAL) {
+    console.log('Auto-matching payment to invoice:', bestMatch.invoice.number)
+    return { 
+      invoice: bestMatch.invoice, 
+      confidence: bestMatch.confidence 
+    }
+  }
+
+  return { confidence: MatchConfidence.MANUAL }
+}
+
+// Calculate match score between payment and invoice
+const calculateMatchScore = (payment: DatabasePayment, invoice: DatabaseInvoice & { customers?: any }): MatchScore => {
+  console.log(`\n--- Calculating match score for invoice ${invoice.number} ---`)
+  console.log('Invoice data:', {
+    id: invoice.id,
+    number: invoice.number,
+    qr_reference: invoice.qr_reference,
+    total: invoice.total,
+    due_date: invoice.due_date,
+    status: invoice.status,
+    has_customer: !!invoice.customers
+  })
+  
+  const criteria = {
+    reference: false,
+    amount: false,
+    date: false,
+    customer: false
+  }
+  
+  let score = 0
+  let maxScore = 0
+
+  // 1. Reference matching (40% weight)
+  maxScore += 40
+  console.log('1. Reference matching:')
+  console.log('  Payment reference:', payment.reference)
+  console.log('  Invoice QR reference:', invoice.qr_reference)
+  console.log('  Invoice number:', invoice.number)
+  
   if (payment.reference) {
     const cleanReference = payment.reference.replace(/\s/g, '')
-    console.log('Looking for QR match:', {
-      paymentReference: cleanReference,
-      companyId: companyId
-    })
-
-    // Debug: Let's see what invoices exist
-    const { data: allInvoices } = await db.invoices()
-      .select('id, number, qr_reference, total')
-      .eq('company_id', companyId)
+    console.log('  Clean reference:', cleanReference)
     
-    console.log('Available invoices for matching:', allInvoices?.map(inv => ({
-      number: inv.number,
-      qr_reference: inv.qr_reference,
-      total: inv.total
-    })))
+    // Check QR reference match (exact)
+    if (invoice.qr_reference && invoice.qr_reference === cleanReference) {
+      score += 40
+      criteria.reference = true
+      console.log('  ✓ QR reference exact match (+40)')
+    }
+    // Check invoice number match (exact)
+    else if (invoice.number === cleanReference) {
+      score += 40
+      criteria.reference = true
+      console.log('  ✓ Invoice number exact match (+40)')
+    }
+    // Check partial reference match (contains)
+    else if (invoice.qr_reference && invoice.qr_reference.includes(cleanReference)) {
+      score += 25
+      criteria.reference = true
+      console.log('  ✓ QR reference partial match (+25)')
+    }
+    // Check if reference contains invoice number
+    else if (cleanReference.includes(invoice.number)) {
+      score += 25
+      criteria.reference = true
+      console.log('  ✓ Reference contains invoice number (+25)')
+    } else {
+      console.log('  ✗ No reference match')
+    }
+  } else {
+    console.log('  ✗ No payment reference')
+  }
+
+  // 2. Amount matching (30% weight)
+  maxScore += 30
+  console.log('2. Amount matching:')
+  console.log('  Payment amount:', payment.amount, typeof payment.amount)
+  console.log('  Invoice total:', invoice.total, typeof invoice.total)
+  console.log('  Amount difference:', Math.abs(payment.amount - invoice.total))
+  
+  if (payment.amount === invoice.total) {
+    score += 30
+    criteria.amount = true
+    console.log('  ✓ Exact amount match (+30)')
+  }
+  // Allow small tolerance for rounding differences (±1 cent)
+  else if (Math.abs(payment.amount - invoice.total) <= 1) {
+    score += 25
+    criteria.amount = true
+    console.log('  ✓ Amount match within tolerance (+25)')
+  } else {
+    console.log('  ✗ No amount match')
+  }
+
+  // 3. Date matching (20% weight)
+  maxScore += 20
+  const paymentDate = new Date(payment.value_date)
+  const invoiceDueDate = new Date(invoice.due_date)
+  
+  // Exact date match
+  if (paymentDate.toDateString() === invoiceDueDate.toDateString()) {
+    score += 20
+    criteria.date = true
+  }
+  // Within 3 days
+  else if (Math.abs(paymentDate.getTime() - invoiceDueDate.getTime()) <= 3 * 24 * 60 * 60 * 1000) {
+    score += 15
+    criteria.date = true
+  }
+  // Within 7 days
+  else if (Math.abs(paymentDate.getTime() - invoiceDueDate.getTime()) <= 7 * 24 * 60 * 60 * 1000) {
+    score += 10
+    criteria.date = true
+  }
+
+  // 4. Customer matching (10% weight) - if payment description contains customer info
+  maxScore += 10
+  if (payment.description && invoice.customers) {
+    const customerName = invoice.customers.name || ''
+    const customerCompany = invoice.customers.company || ''
+    const description = payment.description.toLowerCase()
     
-    const { data: qrInvoices, error: qrError } = await db.invoices()
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('qr_reference', cleanReference)
-
-    console.log('QR search result:', {
-      found: qrInvoices && qrInvoices.length > 0,
-      error: qrError?.message,
-      count: qrInvoices?.length || 0,
-      invoiceNumbers: qrInvoices?.map(inv => inv.number) || []
-    })
-
-    if (qrInvoices && qrInvoices.length > 0) {
-      const qrInvoice = qrInvoices[0] // Take the first match
-      console.log('HIGH confidence match found:', qrInvoice.number)
-      return { invoice: qrInvoice as DatabaseInvoice, confidence: 'HIGH' as MatchConfidence }
+    if (customerName && description.includes(customerName.toLowerCase())) {
+      score += 10
+      criteria.customer = true
+    } else if (customerCompany && description.includes(customerCompany.toLowerCase())) {
+      score += 10
+      criteria.customer = true
     }
   }
 
-  // 2. Try amount + date match (medium confidence)
-  const dayBefore = new Date(payment.value_date)
-  dayBefore.setDate(dayBefore.getDate() - 1)
-  const dayAfter = new Date(payment.value_date)
-  dayAfter.setDate(dayAfter.getDate() + 1)
-
-  const { data: amountDateInvoices } = await db.invoices()
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('total', payment.amount)
-    .gte('due_date', dayBefore.toISOString().split('T')[0])
-    .lte('due_date', dayAfter.toISOString().split('T')[0])
-    .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE'])
-
-  if (amountDateInvoices && amountDateInvoices.length === 1) {
-    return { 
-      invoice: amountDateInvoices[0] as DatabaseInvoice, 
-      confidence: 'MEDIUM' as MatchConfidence
-    }
+  // Determine confidence level
+  const matchPercentage = (score / maxScore) * 100
+  const matchedCriteria = Object.values(criteria).filter(Boolean).length
+  
+  console.log('Final scoring:')
+  console.log('  Score:', score, '/', maxScore)
+  console.log('  Match percentage:', matchPercentage.toFixed(1) + '%')
+  console.log('  Matched criteria:', matchedCriteria)
+  console.log('  Criteria details:', criteria)
+  
+  let confidence: MatchConfidence = MatchConfidence.MANUAL
+  
+  if (matchPercentage >= 80 || matchedCriteria >= 3) {
+    confidence = MatchConfidence.HIGH
+    console.log('  → HIGH confidence')
+  } else if (matchPercentage >= 60 || matchedCriteria >= 2) {
+    confidence = MatchConfidence.MEDIUM
+    console.log('  → MEDIUM confidence')
+  } else if (matchPercentage >= 40 || matchedCriteria >= 1) {
+    confidence = MatchConfidence.LOW
+    console.log('  → LOW confidence')
+  } else {
+    console.log('  → MANUAL confidence')
   }
 
-  // 3. Try amount-only match (low confidence)
-  const { data: amountInvoices } = await db.invoices()
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('total', payment.amount)
-    .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE'])
-
-  if (amountInvoices && amountInvoices.length === 1) {
-    return { 
-      invoice: amountInvoices[0] as DatabaseInvoice, 
-      confidence: 'LOW' as MatchConfidence
-    }
+  return {
+    invoice,
+    score,
+    maxScore,
+    criteria,
+    confidence
   }
-
-  return { confidence: 'MANUAL' as MatchConfidence }
 }
 
 // Helper function to update invoice status after payment
@@ -167,9 +341,10 @@ export const getPayments = asyncHandler(async (req: AuthenticatedRequest, res: R
 
   // Parse query parameters
   const page = parseInt(req.query.page as string) || 1
-  const limit = parseInt(req.query.limit as string) || 10
+  const limit = parseInt(req.query.limit as string) || 5
   const isMatched = req.query.isMatched === 'true' ? true : req.query.isMatched === 'false' ? false : undefined
   const confidence = req.query.confidence as MatchConfidence
+  const dateRange = req.query.dateRange as string
   const sortBy = req.query.sortBy as string || 'value_date'
   const sortOrder = req.query.sortOrder as string || 'desc'
 
@@ -186,6 +361,34 @@ export const getPayments = asyncHandler(async (req: AuthenticatedRequest, res: R
 
     if (confidence) {
       query = query.eq('confidence', confidence)
+    }
+
+    // Apply date range filters
+    if (dateRange) {
+      const now = new Date()
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      
+      if (dateRange === 'thisWeek') {
+        // This week: Monday to Sunday
+        const monday = new Date(today)
+        monday.setDate(today.getDate() - today.getDay() + 1) // Monday
+        const sunday = new Date(monday)
+        sunday.setDate(monday.getDate() + 6) // Sunday
+        
+        query = query
+          .gte('value_date', monday.toISOString().split('T')[0])
+          .lte('value_date', sunday.toISOString().split('T')[0])
+      } else if (dateRange === 'lastWeek') {
+        // Last week: Previous Monday to Sunday
+        const lastMonday = new Date(today)
+        lastMonday.setDate(today.getDate() - today.getDay() - 6) // Previous Monday
+        const lastSunday = new Date(lastMonday)
+        lastSunday.setDate(lastMonday.getDate() + 6) // Previous Sunday
+        
+        query = query
+          .gte('value_date', lastMonday.toISOString().split('T')[0])
+          .lte('value_date', lastSunday.toISOString().split('T')[0])
+      }
     }
 
     // Apply sorting
@@ -265,6 +468,47 @@ export const getPayment = asyncHandler(async (req: AuthenticatedRequest, res: Re
 
   } catch (error) {
     handleSupabaseError(error, 'get payment')
+  }
+})
+
+/**
+ * @desc    Get payments for a specific invoice
+ * @route   GET /api/v1/payments/invoice/:invoiceId
+ * @access  Private
+ */
+export const getPaymentsByInvoice = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+  const invoiceId = req.params.invoiceId
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    const { data, error } = await db.payments()
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('invoice_id', invoiceId)
+      .order('value_date', { ascending: false })
+
+    if (error) {
+      handleSupabaseError(error, 'get payments by invoice')
+      return
+    }
+
+    const payments = (data as DatabasePayment[]).map(createPaymentResponse)
+
+    res.json({
+      success: true,
+      data: { payments }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'get payments by invoice')
   }
 })
 
@@ -765,13 +1009,14 @@ export const importPaymentsMT940 = asyncHandler(async (req: AuthenticatedRequest
           description: ''
         }
         
-        // Parse transaction data (simplified)
-        const match = line.match(/:61:(\d{6})(\d{4})([CD])(\d+),(\d+)/)
+        // Parse transaction data (simplified MT940 format)
+        // Format: :61:YYMMDDMMDD[DC]amountNTRF[reference]//[additional_info]
+        const match = line.match(/:61:(\d{6})(\d{4})([CD])(\d+(?:\.\d{2})?)NTRF[^/]*\/\/([^:]+)/)
         if (match) {
           const [, date, time, dc, amount, ref] = match
           currentPayment.valueDate = `20${date.substring(0, 2)}-${date.substring(2, 4)}-${date.substring(4, 6)}`
-          currentPayment.amount = parseInt(amount) * (dc === 'C' ? 1 : -1) // Credit/Debit
-          currentPayment.reference = ref
+          currentPayment.amount = Math.round(parseFloat(amount) * 100) * (dc === 'C' ? 1 : -1) // Convert to Rappen and handle Credit/Debit
+          currentPayment.reference = ref.trim()
         }
       } else if (line.startsWith(':86:') && currentPayment) {
         // Description line
@@ -1038,6 +1283,105 @@ export const runAutoMatch = asyncHandler(async (req: AuthenticatedRequest, res: 
     res.status(500).json({
       success: false,
       error: 'Failed to run auto-matching'
+    })
+  }
+})
+
+/**
+ * @desc    Get payment matching suggestions
+ * @route   GET /api/v1/payments/:id/suggestions
+ * @access  Private
+ */
+export const getPaymentSuggestions = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+  const paymentId = req.params.id
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    // Get the payment
+    const { data: payment, error: paymentError } = await db.payments()
+      .select('*')
+      .eq('id', paymentId)
+      .eq('company_id', companyId)
+      .single()
+
+    if (paymentError || !payment) {
+      res.status(404).json({
+        success: false,
+        error: 'Payment not found'
+      })
+      return
+    }
+
+    // Get all invoices for this company (including PAID for suggestions)
+    const { data: allInvoices, error: invoicesError } = await db.invoices()
+      .select(`
+        *,
+        customers (
+          id, name, company, email
+        )
+      `)
+      .eq('company_id', companyId)
+      .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE', 'PAID'])
+
+    if (invoicesError || !allInvoices) {
+      res.status(400).json({
+        success: false,
+        error: 'Failed to fetch invoices'
+      })
+      return
+    }
+
+    // Calculate match scores for all invoices
+    const suggestions: MatchScore[] = []
+    
+    for (const invoice of allInvoices) {
+      const score = calculateMatchScore(payment as DatabasePayment, invoice as DatabaseInvoice)
+      if (score.score > 0) {
+        suggestions.push(score)
+      }
+    }
+
+    // Sort by score (highest first) and limit to top 5
+    suggestions.sort((a, b) => b.score - a.score)
+    const topSuggestions = suggestions.slice(0, 5)
+
+    res.json({
+      success: true,
+      data: {
+        payment: createPaymentResponse(payment as DatabasePayment),
+        suggestions: topSuggestions.map(suggestion => ({
+          invoice: {
+            id: suggestion.invoice.id,
+            number: suggestion.invoice.number,
+            total: suggestion.invoice.total,
+            dueDate: suggestion.invoice.due_date,
+            customer: suggestion.invoice.customers ? {
+              name: suggestion.invoice.customers.name,
+              company: suggestion.invoice.customers.company
+            } : null
+          },
+          score: suggestion.score,
+          maxScore: suggestion.maxScore,
+          matchPercentage: Math.round((suggestion.score / suggestion.maxScore) * 100),
+          criteria: suggestion.criteria,
+          confidence: suggestion.confidence
+        }))
+      }
+    })
+
+  } catch (error) {
+    console.error('Error getting payment suggestions:', error)
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get payment suggestions'
     })
   }
 })

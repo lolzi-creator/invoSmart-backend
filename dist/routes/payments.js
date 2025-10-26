@@ -14,6 +14,8 @@ router.post('/import/mt940', paymentController_1.importPaymentsMT940);
 router.post('/import/camt053', paymentController_1.importPaymentsCAMT053);
 router.post('/auto-match', paymentController_1.runAutoMatch);
 router.get('/', paymentController_1.getPayments);
+router.get('/invoice/:invoiceId', paymentController_1.getPaymentsByInvoice);
+router.get('/:id/suggestions', paymentController_1.getPaymentSuggestions);
 router.post('/', (0, validation_1.validateRequest)({ body: validation_1.schemas.createPayment }), paymentController_1.createPayment);
 router.get('/:id', (0, validation_1.validateRequest)({ params: validation_1.schemas.id }), paymentController_1.getPayment);
 router.patch('/:id/match', (0, validation_1.validateRequest)({

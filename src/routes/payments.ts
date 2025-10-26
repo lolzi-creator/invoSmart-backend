@@ -2,6 +2,7 @@ import { Router } from 'express'
 import {
   getPayments,
   getPayment,
+  getPaymentsByInvoice,
   createPayment,
   importPayments,
   importPaymentsCSV,
@@ -10,6 +11,7 @@ import {
   matchPayment,
   deletePayment,
   getPaymentStats,
+  getPaymentSuggestions,
   debugPaymentMatching,
   runAutoMatch
 } from '../controllers/paymentController'
@@ -76,6 +78,20 @@ router.post('/auto-match', runAutoMatch)
  * @access  Private
  */
 router.get('/', getPayments)
+
+/**
+ * @route   GET /api/v1/payments/invoice/:invoiceId
+ * @desc    Get payments for a specific invoice
+ * @access  Private
+ */
+router.get('/invoice/:invoiceId', getPaymentsByInvoice)
+
+/**
+ * @route   GET /api/v1/payments/:id/suggestions
+ * @desc    Get payment matching suggestions
+ * @access  Private
+ */
+router.get('/:id/suggestions', getPaymentSuggestions)
 
 /**
  * @route   POST /api/v1/payments

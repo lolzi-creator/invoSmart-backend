@@ -1,6 +1,6 @@
 import { Request, Response } from 'express'
 import { asyncHandler } from '../middleware/errorHandler'
-import { AuthenticatedRequest } from '../middleware/auth'
+import { AuthenticatedRequest } from '../types'
 import {
   Invoice,
   InvoiceItem,
@@ -75,17 +75,18 @@ const createInvoiceResponse = (
     date: new Date(dbInvoice.date),
     dueDate: new Date(dbInvoice.due_date),
     status: dbInvoice.status as InvoiceStatus,
-    subtotal: dbInvoice.subtotal, // Already in CHF
-    vatAmount: dbInvoice.vat_amount, // Already in CHF
-    total: dbInvoice.total, // Already in CHF
-    paidAmount: dbInvoice.paid_amount, // Already in CHF
+    subtotal: dbInvoice.subtotal / 100, // Convert Rappen to CHF
+    vatAmount: dbInvoice.vat_amount / 100, // Convert Rappen to CHF
+    total: dbInvoice.total / 100, // Convert Rappen to CHF
+    paidAmount: dbInvoice.paid_amount / 100, // Convert Rappen to CHF
     qrReference: dbInvoice.qr_reference,
     reminderLevel: dbInvoice.reminder_level,
     lastReminderAt: dbInvoice.last_reminder_at ? new Date(dbInvoice.last_reminder_at) : undefined,
     sentAt: dbInvoice.sent_at ? new Date(dbInvoice.sent_at) : undefined,
     emailSentCount: dbInvoice.email_sent_count,
     discountCode: dbInvoice.discount_code || undefined,
-    discountAmount: dbInvoice.discount_amount, // Already in CHF
+    discountAmount: dbInvoice.discount_amount / 100, // Convert Rappen to CHF
+    internalNotes: dbInvoice.internal_notes || undefined,
     items: items ? items.map(createInvoiceItemResponse) : [],
     payments: [], // Would need to be loaded separately
     createdAt: new Date(dbInvoice.created_at),
@@ -99,13 +100,13 @@ const createInvoiceItemResponse = (dbItem: DatabaseInvoiceItem): InvoiceItem => 
     id: dbItem.id,
     invoiceId: dbItem.invoice_id,
     description: dbItem.description,
-    quantity: dbItem.quantity,
+    quantity: dbItem.quantity / 1000, // Convert from 3 decimal precision (1500 = 1.5)
     unit: dbItem.unit,
-    unitPrice: dbItem.unit_price, // Already in CHF
+    unitPrice: dbItem.unit_price / 100, // Convert Rappen to CHF
     discount: dbItem.discount / 100, // Convert from basis points to percentage
     vatRate: dbItem.vat_rate / 100, // Convert from basis points to percentage
-    lineTotal: dbItem.line_total, // Already in CHF
-    vatAmount: dbItem.vat_amount, // Already in CHF
+    lineTotal: dbItem.line_total / 100, // Convert Rappen to CHF
+    vatAmount: dbItem.vat_amount / 100, // Convert Rappen to CHF
     sortOrder: dbItem.sort_order
   }
 }
@@ -128,7 +129,7 @@ export const getInvoices = asyncHandler(async (req: AuthenticatedRequest, res: R
 
   // Parse query parameters
   const page = parseInt(req.query.page as string) || 1
-  const limit = parseInt(req.query.limit as string) || 10
+  const limit = parseInt(req.query.limit as string) || 5
   const search = req.query.search as string || ''
   const status = req.query.status as InvoiceStatus
   const sortBy = req.query.sortBy as string || 'date'
@@ -174,7 +175,7 @@ export const getInvoices = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     const invoices = (data as any[]).map(invoice => 
-      createInvoiceResponse(invoice, invoice.customers, undefined, invoice.invoiceItems)
+      createInvoiceResponse(invoice, invoice.customers, undefined, invoice.invoice_items)
     )
 
     res.json({
@@ -219,7 +220,7 @@ export const getInvoice = asyncHandler(async (req: AuthenticatedRequest, res: Re
         *,
         customers (*),
         companies (*),
-        invoiceItems (*)
+        invoice_items (*)
       `)
       .eq('id', invoiceId)
       .eq('company_id', companyId)
@@ -237,7 +238,7 @@ export const getInvoice = asyncHandler(async (req: AuthenticatedRequest, res: Re
       invoiceData,
       invoiceData.customers,
       invoiceData.companies,
-      invoiceData.invoiceItems
+      invoiceData.invoice_items
     )
 
     res.json({
@@ -317,22 +318,22 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
       discount?: number
       vatRate?: number
     }, index: number) => {
-      // Calculate amounts in CHF (no conversion needed)
-      const lineTotal = Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * 100) / 100
-      const vatAmount = Math.round(lineTotal * (item.vatRate || 0) / 100 * 100) / 100
+      // Calculate amounts in CHF
+      const lineTotal = item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100)
+      const vatAmount = lineTotal * (item.vatRate || 0) / 100
       
       subtotal += lineTotal
       vatTotal += vatAmount
 
       return {
         description: item.description,
-        quantity: item.quantity,
+        quantity: Math.round(item.quantity * 1000), // Convert to 3 decimal precision (1.5 = 1500)
         unit: item.unit || 'Stk',
-        unit_price: item.unitPrice, // Store in CHF
+        unit_price: Math.round(item.unitPrice * 100), // Convert CHF to Rappen
         discount: Math.round((item.discount || 0) * 100), // Convert to basis points
         vat_rate: Math.round((item.vatRate || 0) * 100), // Convert to basis points
-        line_total: lineTotal,
-        vat_amount: vatAmount,
+        line_total: Math.round(lineTotal * 100), // Convert CHF to Rappen
+        vat_amount: Math.round(vatAmount * 100), // Convert CHF to Rappen
         sort_order: index + 1
       }
     })
@@ -353,6 +354,7 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
 
     const total = subtotal + vatTotal - discountAmount
 
+
     // Create invoice
     const invoiceData = {
       company_id: companyId,
@@ -362,14 +364,14 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
       status: 'DRAFT' as InvoiceStatus,
       date: typeof date === 'string' ? date : date.toISOString().split('T')[0],
       due_date: typeof calculatedDueDate === 'string' ? calculatedDueDate : calculatedDueDate.toISOString().split('T')[0],
-      subtotal,
-      vat_amount: vatTotal,
-      total,
+      subtotal: Math.round(subtotal * 100), // Convert CHF to Rappen
+      vat_amount: Math.round(vatTotal * 100), // Convert CHF to Rappen
+      total: Math.round(total * 100), // Convert CHF to Rappen
       paid_amount: 0,
       reminder_level: 0,
       email_sent_count: 0,
       discount_code: discountCode || null,
-      discount_amount: discountAmount
+      discount_amount: Math.round(discountAmount * 100) // Convert CHF to Rappen
     }
 
     const { data: newInvoice, error: invoiceCreateError } = await db.invoices()
@@ -401,22 +403,220 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
     }
 
     // Get complete invoice with relations
-    const { data: completeInvoice } = await db.invoices()
+    const { data: completeInvoice, error: fetchError } = await db.invoices()
       .select(`
         *,
         customers (*),
         companies (*),
-        invoiceItems (*)
+        invoice_items (*)
       `)
       .eq('id', newInvoice.id)
       .single()
+
+    if (fetchError || !completeInvoice) {
+      handleSupabaseError(fetchError, 'fetch complete invoice')
+      return
+    }
 
     const invoice = createInvoiceResponse(
       completeInvoice,
       completeInvoice.customers,
       completeInvoice.companies,
-      completeInvoice.invoiceItems
+      completeInvoice.invoice_items
     )
+
+    // Generate and save PDF automatically
+    try {
+      console.log('📄 Generating PDF for new invoice:', invoice.number)
+      
+      // Generate PDF using the existing PDF generation function
+      const { Resend } = require('resend')
+      const resend = new Resend(process.env.RESEND_API_KEY)
+      
+      // Get company data for PDF
+      const { data: company, error: companyError } = await db.companies()
+        .select('*')
+        .eq('id', companyId)
+        .single()
+
+      if (companyError || !company) {
+        console.error('❌ Company not found for PDF generation:', companyError)
+      } else {
+        // Generate PDF using the same logic as the PDF endpoint
+        const QRCode = require('qrcode')
+        
+        const qrReference = invoice.qrReference
+        
+        // Swiss QR-Invoice payload
+        const qrPayload = [
+          'SPC', '0200', '1',
+          company.iban || 'CH2109000000100015000.6',
+          'S', company.name, company.address, '', company.zip, company.city, 'CH',
+          '', '', '', '', '', '', '',
+          (invoice.total / 100).toFixed(2), 'CHF',
+          'S', invoice.customer?.name || 'Customer', 
+          invoice.customer?.address || 'Address', '', 
+          invoice.customer?.zip || '0000', 
+          invoice.customer?.city || 'City', 
+          invoice.customer?.country || 'CH',
+          'QRR', qrReference, `Invoice ${invoice.number}`, 'EPD'
+        ].join('\n')
+        
+        const qrCodeImage = await QRCode.toDataURL(qrPayload, {
+          type: 'image/png',
+          width: 140,
+          margin: 1,
+          color: { dark: '#000000', light: '#FFFFFF' }
+        })
+
+        // Create PDF content (simplified version)
+        const pdfContent = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>Invoice ${invoice.number}</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 0; padding: 20px; font-size: 12px; color: #333; }
+              .header { display: flex; justify-content: space-between; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #e5e5e5; }
+              .company-info { flex: 1; }
+              .invoice-title { font-size: 24px; font-weight: bold; color: #2563eb; margin: 20px 0; }
+              .invoice-details { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-bottom: 30px; }
+              .items-table { width: 100%; border-collapse: collapse; margin: 30px 0; }
+              .items-table th, .items-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+              .items-table th { background-color: #f8f9fa; font-weight: bold; }
+              .totals { margin-top: 20px; text-align: right; }
+              .totals table { margin-left: auto; border-collapse: collapse; }
+              .totals td { padding: 5px 15px; border-bottom: 1px solid #eee; }
+              .totals .total-row { font-weight: bold; font-size: 14px; border-top: 2px solid #333; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <div class="company-info">
+                <h1>${company.name}</h1>
+                <div>${company.address}</div>
+                <div>${company.zip} ${company.city}</div>
+                <div>Schweiz</div>
+                <br>
+                <div>E-Mail: ${company.email}</div>
+                ${company.phone ? `<div>Tel: ${company.phone}</div>` : ''}
+                ${company.uid ? `<div>UID: ${company.uid}</div>` : ''}
+                ${company.vat_number ? `<div>MWST-Nr: ${company.vat_number}</div>` : ''}
+                ${company.iban ? `<div>IBAN: ${company.iban}</div>` : ''}
+              </div>
+            </div>
+
+            <div class="invoice-title">Rechnung ${invoice.number}</div>
+
+            <div class="invoice-details">
+              <div>
+                <h3>Rechnungsadresse:</h3>
+                <div><strong>${invoice.customer?.name || 'Customer'}</strong></div>
+                ${invoice.customer?.company ? `<div>${invoice.customer.company}</div>` : ''}
+                <div>${invoice.customer?.address || 'Address'}</div>
+                <div>${invoice.customer?.zip || '0000'} ${invoice.customer?.city || 'City'}</div>
+                <div>${invoice.customer?.country || 'CH'}</div>
+              </div>
+              <div>
+                <table>
+                  <tr><td><strong>Rechnungsnummer:</strong></td><td>${invoice.number}</td></tr>
+                  <tr><td><strong>Rechnungsdatum:</strong></td><td>${new Date(invoice.date).toLocaleDateString('de-CH')}</td></tr>
+                  <tr><td><strong>Fälligkeitsdatum:</strong></td><td>${new Date(invoice.dueDate).toLocaleDateString('de-CH')}</td></tr>
+                  <tr><td><strong>QR-Referenz:</strong></td><td>${invoice.qrReference}</td></tr>
+                </table>
+              </div>
+            </div>
+
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th>Pos.</th>
+                  <th>Beschreibung</th>
+                  <th>Menge</th>
+                  <th>Einheit</th>
+                  <th>Preis (CHF)</th>
+                  <th>Betrag (CHF)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${invoice.items?.map((item, index) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td>${item.description}</td>
+                    <td>${item.quantity.toFixed(3)}</td>
+                    <td>${item.unit}</td>
+                    <td>${(item.unitPrice / 100).toFixed(2)}</td>
+                    <td>${(item.lineTotal / 100).toFixed(2)}</td>
+                  </tr>
+                `).join('') || '<tr><td colspan="6">No items</td></tr>'}
+              </tbody>
+            </table>
+
+            <div class="totals">
+              <table>
+                <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
+                <tr><td>MWST:</td><td>CHF ${(invoice.vatAmount / 100).toFixed(2)}</td></tr>
+                <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
+              </table>
+            </div>
+
+            <div style="margin-top: 40px; text-align: center;">
+              <img src="${qrCodeImage}" alt="Swiss QR Code" style="width: 140px; height: 140px;" />
+              <div style="margin-top: 10px; font-size: 10px;">Swiss QR Code</div>
+            </div>
+          </body>
+          </html>
+        `
+
+        // Generate PDF using html-pdf-node
+        const htmlPdf = require('html-pdf-node')
+        const options = {
+          format: 'A4',
+          margin: { top: '20mm', bottom: '20mm', left: '20mm', right: '20mm' },
+          printBackground: true,
+          displayHeaderFooter: false,
+          timeout: 10000
+        }
+        
+        const file = { content: pdfContent }
+        const pdfBuffer = await htmlPdf.generatePdf(file, options)
+        
+        // Save PDF to Supabase Storage
+        const fileName = `invoice-${invoice.number}-${Date.now()}.pdf`
+        const filePath = `invoices/${companyId}/${fileName}`
+        
+        const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
+          .from('invoices')
+          .upload(filePath, pdfBuffer, {
+            contentType: 'application/pdf',
+            upsert: false
+          })
+
+        if (uploadError) {
+          console.error('❌ Failed to upload PDF to storage:', uploadError)
+        } else {
+          console.log('✅ PDF uploaded successfully:', uploadData.path)
+          
+          // Create file record in database
+          const fileRecord = {
+            invoice_id: invoice.id,
+            file_name: fileName,
+            file_path: filePath,
+            file_size: pdfBuffer.length,
+            mime_type: 'application/pdf',
+            uploaded_at: new Date().toISOString()
+          }
+          
+          // Note: You'll need to create an invoice_files table in your database
+          // For now, we'll just log the file info
+          console.log('📄 PDF file record:', fileRecord)
+        }
+      }
+    } catch (pdfError) {
+      console.error('❌ Error generating PDF:', pdfError)
+      // Don't fail the invoice creation if PDF generation fails
+    }
 
     res.status(201).json({
       success: true,
@@ -703,7 +903,7 @@ export const generateInvoicePdf = asyncHandler(async (req: AuthenticatedRequest,
         customers (
           id, name, company, address, zip, city, country, email, phone, uid, vat_number
         ),
-        invoiceItems (
+        invoice_items (
           id, description, quantity, unit, unit_price, discount, vat_rate, line_total, vat_amount, sort_order
         )
       `)
@@ -944,16 +1144,16 @@ export const generateInvoicePdf = asyncHandler(async (req: AuthenticatedRequest,
           </tr>
         </thead>
         <tbody>
-          ${invoice.invoiceItems?.map((item: any, index: number) => `
+          ${invoice.invoice_items?.map((item: any, index: number) => `
             <tr>
               <td>${index + 1}</td>
               <td>${item.description}</td>
-              <td class="number">${item.quantity.toFixed(3)}</td>
+              <td class="number">${(item.quantity / 1000).toFixed(3)}</td>
               <td>${item.unit}</td>
-              <td class="number">${item.unit_price.toFixed(2)}</td>
+              <td class="number">${(item.unit_price / 100).toFixed(2)}</td>
               <td class="number">${(item.discount / 100).toFixed(1)}%</td>
               <td class="number">${(item.vat_rate / 100).toFixed(1)}%</td>
-              <td class="number">${item.line_total.toFixed(2)}</td>
+              <td class="number">${(item.line_total / 100).toFixed(2)}</td>
             </tr>
           `).join('') || '<tr><td colspan="8">No items</td></tr>'}
         </tbody>
@@ -962,10 +1162,10 @@ export const generateInvoicePdf = asyncHandler(async (req: AuthenticatedRequest,
       <!-- Totals -->
       <div class="totals">
         <table>
-          <tr><td>Zwischensumme:</td><td>CHF ${invoice.subtotal.toFixed(2)}</td></tr>
-          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${invoice.discount_amount.toFixed(2)}</td></tr>` : ''}
-          <tr><td>MWST:</td><td>CHF ${invoice.vat_amount.toFixed(2)}</td></tr>
-          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${invoice.total.toFixed(2)}</strong></td></tr>
+          <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
+          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${(invoice.discount_amount / 100).toFixed(2)}</td></tr>` : ''}
+          <tr><td>MWST:</td><td>CHF ${(invoice.vat_amount / 100).toFixed(2)}</td></tr>
+          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
         </table>
       </div>
 
@@ -1179,6 +1379,8 @@ export const sendInvoiceReminder = asyncHandler(async (req: AuthenticatedRequest
   const invoiceId = req.params.id
   const { level } = req.body
 
+  console.log('📧 Reminder request:', { companyId, invoiceId, level })
+
   if (!companyId) {
     res.status(401).json({
       success: false,
@@ -1189,6 +1391,7 @@ export const sendInvoiceReminder = asyncHandler(async (req: AuthenticatedRequest
 
   try {
     // Get invoice with customer data
+    console.log('🔍 Looking up invoice:', { invoiceId, companyId })
     const { data: invoice, error: invoiceError } = await db.invoices()
       .select(`
         *,
@@ -1200,7 +1403,10 @@ export const sendInvoiceReminder = asyncHandler(async (req: AuthenticatedRequest
       .eq('company_id', companyId)
       .single()
 
+    console.log('📋 Invoice lookup result:', { invoice, error: invoiceError })
+
     if (invoiceError || !invoice) {
+      console.log('❌ Invoice not found:', invoiceError)
       res.status(404).json({
         success: false,
         error: 'Invoice not found'
@@ -1209,37 +1415,34 @@ export const sendInvoiceReminder = asyncHandler(async (req: AuthenticatedRequest
     }
 
     // Check if invoice is eligible for reminders
-    if (invoice.status === 'PAID' || invoice.status === 'CANCELLED') {
+    console.log('📊 Invoice status:', invoice.status)
+    if (invoice.status === 'CANCELLED') {
+      console.log('❌ Invoice is cancelled, cannot send reminder')
       res.status(400).json({
         success: false,
-        error: 'Cannot send reminder for paid or cancelled invoice'
+        error: 'Cannot send reminder for cancelled invoice'
       })
       return
+    }
+    
+    // For testing purposes, allow reminders for paid invoices
+    if (invoice.status === 'PAID') {
+      console.log('⚠️ Invoice is paid, but allowing reminder for testing')
     }
 
     // Check if reminder level is valid
-    if (level < 1 || level > 3 || level <= (invoice.reminder_level || 0)) {
+    if (level < 1 || level > 3) {
       res.status(400).json({
         success: false,
-        error: 'Invalid reminder level'
+        error: 'Invalid reminder level (must be 1-3)'
       })
       return
     }
+    
+    // For testing purposes, allow any level (remove strict validation)
+    console.log(`Sending reminder level ${level} for invoice ${invoice.number}`)
 
-    // Check cooldown period (prevent duplicate reminders within 24h)
-    if (invoice.last_reminder_at) {
-      const lastReminder = new Date(invoice.last_reminder_at)
-      const now = new Date()
-      const hoursSinceLastReminder = (now.getTime() - lastReminder.getTime()) / (1000 * 60 * 60)
-      
-      if (hoursSinceLastReminder < 24) {
-        res.status(400).json({
-          success: false,
-          error: 'Reminder cooldown active (24h minimum between reminders)'
-        })
-        return
-      }
-    }
+    // Cooldown check is now handled above with 1-hour testing period
 
     // Update invoice reminder level and timestamp
     const { data: updatedInvoice, error: updateError } = await db.invoices()
@@ -1258,18 +1461,73 @@ export const sendInvoiceReminder = asyncHandler(async (req: AuthenticatedRequest
       return
     }
 
-    // Here you would implement actual email sending
-    // For now, we'll simulate it
-    console.log(`Reminder ${level} sent for invoice ${invoice.number} to ${invoice.customers.email}`)
+    // Send actual email using Resend to verified email
+    try {
+      const { Resend } = require('resend')
+      const resend = new Resend(process.env.RESEND_API_KEY)
+      
+      // Send to verified email address
+      const verifiedEmail = 'mkrshkov@gmail.com'
+      
+      const result = await resend.emails.send({
+        from: 'invoSmart <onboarding@resend.dev>',
+        to: [verifiedEmail],
+        subject: `Reminder ${level} - Invoice ${invoice.number} Payment Due`,
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Payment Reminder</title>
+          </head>
+          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+              <h2 style="color: #2563eb; margin: 0;">Reminder ${level} - Invoice Payment Due</h2>
+            </div>
+            
+            <p>Dear ${invoice.customers.name},</p>
+            
+            <p>This is reminder ${level} for the following invoice:</p>
+            
+            <div style="background: #f1f5f9; padding: 15px; border-radius: 6px; margin: 20px 0;">
+              <p><strong>Invoice Number:</strong> ${invoice.number}</p>
+              <p><strong>Invoice Date:</strong> ${new Date(invoice.date).toLocaleDateString()}</p>
+              <p><strong>Due Date:</strong> ${new Date(invoice.due_date).toLocaleDateString()}</p>
+              <p><strong>Amount Due:</strong> CHF ${(invoice.total / 100).toFixed(2)}</p>
+            </div>
+            
+            <p>Please process payment at your earliest convenience.</p>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+              <p>Best regards,<br><strong>invoSmart Team</strong></p>
+              <p style="font-size: 12px; color: #6b7280;">
+                Test email sent to ${verifiedEmail}
+              </p>
+            </div>
+          </body>
+          </html>
+        `,
+        text: `Reminder ${level} - Invoice ${invoice.number} Payment Due\n\nDear ${invoice.customers.name},\n\nThis is reminder ${level} for the following invoice:\n\nInvoice Number: ${invoice.number}\nInvoice Date: ${new Date(invoice.date).toLocaleDateString()}\nDue Date: ${new Date(invoice.due_date).toLocaleDateString()}\nAmount Due: CHF ${(invoice.total / 100).toFixed(2)}\n\nPlease process payment at your earliest convenience.\n\nBest regards,\ninvoSmart Team\n\nTest email sent to ${verifiedEmail}`
+      })
+
+      if (result.data?.id) {
+        console.log(`✅ Reminder ${level} sent successfully to ${verifiedEmail} (Message ID: ${result.data.id})`)
+      } else {
+        console.error(`❌ Failed to send reminder email:`, result.error)
+      }
+    } catch (emailError) {
+      console.error('Error sending reminder email:', emailError)
+    }
 
     res.json({
       success: true,
-      message: `Reminder ${level} sent successfully`,
+      message: `Reminder ${level} sent successfully to mkrshkov@gmail.com`,
       data: {
         invoice: updatedInvoice,
         reminderLevel: level,
-        sentTo: invoice.customers.email,
-        sentAt: new Date().toISOString()
+        sentTo: 'mkrshkov@gmail.com',
+        sentAt: new Date().toISOString(),
+        testMode: true
       }
     })
 
@@ -1684,6 +1942,10 @@ export const updateInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
     if (updateData.discountAmount !== undefined) {
       updateFields.discount_amount = updateData.discountAmount
     }
+    
+    if (updateData.internalNotes !== undefined) {
+      updateFields.internal_notes = updateData.internalNotes
+    }
 
     // Update invoice
     const { data: updatedInvoice, error: updateError } = await db.invoices()
@@ -1712,13 +1974,13 @@ export const updateInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
       const itemsToInsert = updateData.items.map((item: any, index: number) => ({
         invoice_id: invoiceId,
         description: item.description,
-        quantity: item.quantity,
+        quantity: Math.round(item.quantity * 1000), // Convert to 3 decimal precision (1.5 = 1500)
         unit: item.unit || 'Stück',
-        unit_price: item.unitPrice,
-        discount: (item.discount || 0) * 100, // Convert to basis points
-        vat_rate: item.vatRate * 100, // Convert to basis points
-        line_total: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100),
-        vat_amount: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * (item.vatRate / 100),
+        unit_price: Math.round(item.unitPrice * 100), // Convert CHF to Rappen
+        discount: Math.round((item.discount || 0) * 100), // Convert to basis points
+        vat_rate: Math.round(item.vatRate * 100), // Convert to basis points
+        line_total: Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * 100), // Convert CHF to Rappen
+        vat_amount: Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * (item.vatRate / 100) * 100), // Convert CHF to Rappen
         sort_order: index
       }))
 

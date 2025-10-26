@@ -17,15 +17,14 @@ exports.config = {
         anonKey: process.env.SUPABASE_ANON_KEY || '',
         serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || ''
     },
-    smtp: {
-        host: process.env.SMTP_HOST || '',
-        port: parseInt(process.env.SMTP_PORT || '587'),
-        user: process.env.SMTP_USER || '',
-        pass: process.env.SMTP_PASS || ''
+    email: {
+        resendApiKey: process.env.RESEND_API_KEY || '',
+        fromEmail: 'onboarding@resend.dev',
+        fromName: process.env.FROM_NAME || 'invoSmart'
     },
     rateLimit: {
         windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'),
-        maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100')
+        maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '999999')
     },
     cors: {
         origins: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : ['http://localhost:3000', 'http://localhost:3001']

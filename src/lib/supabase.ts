@@ -52,6 +52,9 @@ export const db = {
   // Email Templates
   emailTemplates: () => supabaseAdmin.from('email_templates'),
   
+  // Expenses
+  expenses: () => supabaseAdmin.from('expenses'),
+  
   // Views
   invoiceOverview: () => supabaseAdmin.from('invoice_overview'),
   paymentStats: () => supabaseAdmin.from('payment_stats')
@@ -183,6 +186,7 @@ export interface DatabaseInvoice {
   email_sent_count: number
   discount_code?: string
   discount_amount: number
+  internal_notes?: string
   created_at: string
   updated_at: string
 }
@@ -231,3 +235,32 @@ export interface DatabaseEmailTemplate {
   created_at: string
   updated_at: string
 }
+export interface ExpenseAttachment {
+  id: string
+  expense_id: string
+  filename: string
+  originalName: string
+  filePath: string
+  fileSize: number
+  mimeType: string
+  uploadedAt: string
+}
+
+export interface DatabaseExpense {
+  id: string
+  company_id: string
+  user_id: string
+  category: string
+  description: string
+  amount: number
+  currency: string
+  payment_date: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  approved_by?: string
+  approved_at?: string
+  rejection_reason?: string
+  attachments?: ExpenseAttachment[]
+  created_at: string
+  updated_at: string
+}
+

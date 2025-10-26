@@ -1,9 +1,7 @@
-import { Request, Response } from 'express';
-export declare const getEmailTemplates: (req: Request, res: Response, next: import("express").NextFunction) => void;
-export declare const createEmailTemplate: (req: Request, res: Response, next: import("express").NextFunction) => void;
-export declare const updateEmailTemplate: (req: Request, res: Response, next: import("express").NextFunction) => void;
-export declare const deleteEmailTemplate: (req: Request, res: Response, next: import("express").NextFunction) => void;
-export declare const sendInvoiceEmail: (req: Request, res: Response, next: import("express").NextFunction) => void;
-export declare const sendReminderEmail: (req: Request, res: Response, next: import("express").NextFunction) => void;
-export declare const previewEmail: (req: Request, res: Response, next: import("express").NextFunction) => void;
+import { Response } from 'express';
+import { AuthenticatedRequest } from '../types';
+export declare const sendInvoiceReminder: (req: AuthenticatedRequest, res: Response) => Promise<Response<any, Record<string, any>>>;
+export declare const sendInvoiceNotification: (req: AuthenticatedRequest, res: Response) => Promise<Response<any, Record<string, any>>>;
+export declare const sendBulkReminders: (req: AuthenticatedRequest, res: Response) => Promise<Response<any, Record<string, any>>>;
+export declare const testEmail: (req: AuthenticatedRequest, res: Response) => Promise<Response<any, Record<string, any>>>;
 //# sourceMappingURL=emailController.d.ts.map

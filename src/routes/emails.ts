@@ -1,75 +1,67 @@
 import { Router } from 'express'
-import {
-  sendInvoiceEmail,
-  sendReminderEmail,
-  getEmailTemplates,
-  createEmailTemplate,
-  updateEmailTemplate,
-  deleteEmailTemplate,
-  previewEmail
-} from '../controllers/emailController'
 import { authenticateToken } from '../middleware/auth'
-import { validateRequest, schemas } from '../middleware/validation'
+import {
+  sendInvoiceReminder,
+  sendInvoiceNotification,
+  sendBulkReminders,
+  testEmail
+} from '../controllers/emailController'
+
+console.log('📧 Loading email routes...')
 
 const router = Router()
 
-// Apply authentication to all routes
+// All email routes require authentication
 router.use(authenticateToken)
 
-/**
- * @route   GET /api/v1/emails/templates
- * @desc    Get email templates
- * @access  Private
- */
-router.get('/templates', getEmailTemplates)
+// Send reminder for specific invoice
+router.post('/reminder', sendInvoiceReminder)
 
-/**
- * @route   POST /api/v1/emails/templates
- * @desc    Create email template
- * @access  Private
- */
-router.post('/templates', validateRequest({ body: schemas.createEmailTemplate }), createEmailTemplate)
+// Send invoice notification
+router.post('/notification', sendInvoiceNotification)
 
-/**
- * @route   PUT /api/v1/emails/templates/:id
- * @desc    Update email template
- * @access  Private
- */
-router.put('/templates/:id', validateRequest({ 
-  params: schemas.id, 
-  body: schemas.updateEmailTemplate 
-}), updateEmailTemplate)
+// Send bulk reminders for all overdue invoices
+router.post('/bulk-reminders', sendBulkReminders)
 
-/**
- * @route   DELETE /api/v1/emails/templates/:id
- * @desc    Delete email template
- * @access  Private
- */
-router.delete('/templates/:id', validateRequest({ params: schemas.id }), deleteEmailTemplate)
+// Send test email
+router.post('/test', testEmail)
 
-/**
- * @route   POST /api/v1/emails/invoice/:invoiceId
- * @desc    Send invoice email
- * @access  Private
- */
-router.post('/invoice/:invoiceId', validateRequest({ 
-  body: schemas.sendEmail 
-}), sendInvoiceEmail)
+// Simple email templates endpoint
+router.get('/templates', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Email templates endpoint - coming soon',
+    data: []
+  })
+})
 
-/**
- * @route   POST /api/v1/emails/reminder/:invoiceId
- * @desc    Send reminder email
- * @access  Private
- */
-router.post('/reminder/:invoiceId', validateRequest({ 
-  body: schemas.sendReminder 
-}), sendReminderEmail)
+// Simple send invoice email endpoint
+router.post('/invoice/:invoiceId', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Send invoice email - coming soon',
+    data: null
+  })
+})
 
-/**
- * @route   GET /api/v1/emails/preview/:invoiceId
- * @desc    Preview email template
- * @access  Private
- */
-router.get('/preview/:invoiceId', previewEmail)
+// Simple send reminder email endpoint
+router.post('/reminder/:invoiceId', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Send reminder email - coming soon',
+    data: null
+  })
+})
+
+// Simple preview email endpoint
+router.get('/preview/:invoiceId', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Preview email - coming soon',
+    data: null
+  })
+})
+
+console.log('📧 Email routes loaded successfully!')
 
 export default router

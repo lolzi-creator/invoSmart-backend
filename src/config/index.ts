@@ -18,18 +18,17 @@ export const config = {
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || ''
   },
   
-  // SMTP
-  smtp: {
-    host: process.env.SMTP_HOST || '',
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    user: process.env.SMTP_USER || '',
-    pass: process.env.SMTP_PASS || ''
+  // Email (Resend)
+  email: {
+    resendApiKey: process.env.RESEND_API_KEY || '',
+    fromEmail: 'onboarding@resend.dev', // Using Resend's verified domain
+    fromName: process.env.FROM_NAME || 'invoSmart'
   },
   
-  // Rate Limiting
+  // Rate Limiting - Disabled for development
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '900000'), // 15 minutes
-    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100')
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '999999') // Effectively disabled
   },
   
   // CORS

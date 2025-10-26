@@ -8,11 +8,10 @@ export declare const config: {
         anonKey: string;
         serviceRoleKey: string;
     };
-    smtp: {
-        host: string;
-        port: number;
-        user: string;
-        pass: string;
+    email: {
+        resendApiKey: string;
+        fromEmail: string;
+        fromName: string;
     };
     rateLimit: {
         windowMs: number;

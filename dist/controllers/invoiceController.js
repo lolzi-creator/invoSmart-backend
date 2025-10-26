@@ -53,17 +53,18 @@ const createInvoiceResponse = (dbInvoice, customer, company, items) => {
         date: new Date(dbInvoice.date),
         dueDate: new Date(dbInvoice.due_date),
         status: dbInvoice.status,
-        subtotal: dbInvoice.subtotal,
-        vatAmount: dbInvoice.vat_amount,
-        total: dbInvoice.total,
-        paidAmount: dbInvoice.paid_amount,
+        subtotal: dbInvoice.subtotal / 100,
+        vatAmount: dbInvoice.vat_amount / 100,
+        total: dbInvoice.total / 100,
+        paidAmount: dbInvoice.paid_amount / 100,
         qrReference: dbInvoice.qr_reference,
         reminderLevel: dbInvoice.reminder_level,
         lastReminderAt: dbInvoice.last_reminder_at ? new Date(dbInvoice.last_reminder_at) : undefined,
         sentAt: dbInvoice.sent_at ? new Date(dbInvoice.sent_at) : undefined,
         emailSentCount: dbInvoice.email_sent_count,
         discountCode: dbInvoice.discount_code || undefined,
-        discountAmount: dbInvoice.discount_amount,
+        discountAmount: dbInvoice.discount_amount / 100,
+        internalNotes: dbInvoice.internal_notes || undefined,
         items: items ? items.map(createInvoiceItemResponse) : [],
         payments: [],
         createdAt: new Date(dbInvoice.created_at),
@@ -75,13 +76,13 @@ const createInvoiceItemResponse = (dbItem) => {
         id: dbItem.id,
         invoiceId: dbItem.invoice_id,
         description: dbItem.description,
-        quantity: dbItem.quantity,
+        quantity: dbItem.quantity / 1000,
         unit: dbItem.unit,
-        unitPrice: dbItem.unit_price,
+        unitPrice: dbItem.unit_price / 100,
         discount: dbItem.discount / 100,
         vatRate: dbItem.vat_rate / 100,
-        lineTotal: dbItem.line_total,
-        vatAmount: dbItem.vat_amount,
+        lineTotal: dbItem.line_total / 100,
+        vatAmount: dbItem.vat_amount / 100,
         sortOrder: dbItem.sort_order
     };
 };
@@ -95,7 +96,7 @@ exports.getInvoices = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         return;
     }
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 5;
     const search = req.query.search || '';
     const status = req.query.status;
     const sortBy = req.query.sortBy || 'date';
@@ -128,7 +129,7 @@ exports.getInvoices = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             (0, supabase_1.handleSupabaseError)(error, 'get invoices');
             return;
         }
-        const invoices = data.map(invoice => createInvoiceResponse(invoice, invoice.customers, undefined, invoice.invoiceItems));
+        const invoices = data.map(invoice => createInvoiceResponse(invoice, invoice.customers, undefined, invoice.invoice_items));
         res.json({
             success: true,
             data: {
@@ -162,7 +163,7 @@ exports.getInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         *,
         customers (*),
         companies (*),
-        invoiceItems (*)
+        invoice_items (*)
       `)
             .eq('id', invoiceId)
             .eq('company_id', companyId)
@@ -174,7 +175,7 @@ exports.getInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             });
             return;
         }
-        const invoice = createInvoiceResponse(invoiceData, invoiceData.customers, invoiceData.companies, invoiceData.invoiceItems);
+        const invoice = createInvoiceResponse(invoiceData, invoiceData.customers, invoiceData.companies, invoiceData.invoice_items);
         res.json({
             success: true,
             data: { invoice }
@@ -221,19 +222,19 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         let vatTotal = 0;
         let discountAmount = 0;
         const processedItems = items.map((item, index) => {
-            const lineTotal = Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * 100) / 100;
-            const vatAmount = Math.round(lineTotal * (item.vatRate || 0) / 100 * 100) / 100;
+            const lineTotal = item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100);
+            const vatAmount = lineTotal * (item.vatRate || 0) / 100;
             subtotal += lineTotal;
             vatTotal += vatAmount;
             return {
                 description: item.description,
-                quantity: item.quantity,
+                quantity: Math.round(item.quantity * 1000),
                 unit: item.unit || 'Stk',
-                unit_price: item.unitPrice,
+                unit_price: Math.round(item.unitPrice * 100),
                 discount: Math.round((item.discount || 0) * 100),
                 vat_rate: Math.round((item.vatRate || 0) * 100),
-                line_total: lineTotal,
-                vat_amount: vatAmount,
+                line_total: Math.round(lineTotal * 100),
+                vat_amount: Math.round(vatAmount * 100),
                 sort_order: index + 1
             };
         });
@@ -257,14 +258,14 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             status: 'DRAFT',
             date: typeof date === 'string' ? date : date.toISOString().split('T')[0],
             due_date: typeof calculatedDueDate === 'string' ? calculatedDueDate : calculatedDueDate.toISOString().split('T')[0],
-            subtotal,
-            vat_amount: vatTotal,
-            total,
+            subtotal: Math.round(subtotal * 100),
+            vat_amount: Math.round(vatTotal * 100),
+            total: Math.round(total * 100),
             paid_amount: 0,
             reminder_level: 0,
             email_sent_count: 0,
             discount_code: discountCode || null,
-            discount_amount: discountAmount
+            discount_amount: Math.round(discountAmount * 100)
         };
         const { data: newInvoice, error: invoiceCreateError } = await supabase_1.db.invoices()
             .insert(invoiceData)
@@ -287,16 +288,189 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                 return;
             }
         }
-        const { data: completeInvoice } = await supabase_1.db.invoices()
+        const { data: completeInvoice, error: fetchError } = await supabase_1.db.invoices()
             .select(`
         *,
         customers (*),
         companies (*),
-        invoiceItems (*)
+        invoice_items (*)
       `)
             .eq('id', newInvoice.id)
             .single();
-        const invoice = createInvoiceResponse(completeInvoice, completeInvoice.customers, completeInvoice.companies, completeInvoice.invoiceItems);
+        if (fetchError || !completeInvoice) {
+            (0, supabase_1.handleSupabaseError)(fetchError, 'fetch complete invoice');
+            return;
+        }
+        const invoice = createInvoiceResponse(completeInvoice, completeInvoice.customers, completeInvoice.companies, completeInvoice.invoice_items);
+        try {
+            console.log('📄 Generating PDF for new invoice:', invoice.number);
+            const { Resend } = require('resend');
+            const resend = new Resend(process.env.RESEND_API_KEY);
+            const { data: company, error: companyError } = await supabase_1.db.companies()
+                .select('*')
+                .eq('id', companyId)
+                .single();
+            if (companyError || !company) {
+                console.error('❌ Company not found for PDF generation:', companyError);
+            }
+            else {
+                const QRCode = require('qrcode');
+                const qrReference = invoice.qrReference;
+                const qrPayload = [
+                    'SPC', '0200', '1',
+                    company.iban || 'CH2109000000100015000.6',
+                    'S', company.name, company.address, '', company.zip, company.city, 'CH',
+                    '', '', '', '', '', '', '',
+                    (invoice.total / 100).toFixed(2), 'CHF',
+                    'S', invoice.customer?.name || 'Customer',
+                    invoice.customer?.address || 'Address', '',
+                    invoice.customer?.zip || '0000',
+                    invoice.customer?.city || 'City',
+                    invoice.customer?.country || 'CH',
+                    'QRR', qrReference, `Invoice ${invoice.number}`, 'EPD'
+                ].join('\n');
+                const qrCodeImage = await QRCode.toDataURL(qrPayload, {
+                    type: 'image/png',
+                    width: 140,
+                    margin: 1,
+                    color: { dark: '#000000', light: '#FFFFFF' }
+                });
+                const pdfContent = `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>Invoice ${invoice.number}</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 0; padding: 20px; font-size: 12px; color: #333; }
+              .header { display: flex; justify-content: space-between; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #e5e5e5; }
+              .company-info { flex: 1; }
+              .invoice-title { font-size: 24px; font-weight: bold; color: #2563eb; margin: 20px 0; }
+              .invoice-details { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-bottom: 30px; }
+              .items-table { width: 100%; border-collapse: collapse; margin: 30px 0; }
+              .items-table th, .items-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+              .items-table th { background-color: #f8f9fa; font-weight: bold; }
+              .totals { margin-top: 20px; text-align: right; }
+              .totals table { margin-left: auto; border-collapse: collapse; }
+              .totals td { padding: 5px 15px; border-bottom: 1px solid #eee; }
+              .totals .total-row { font-weight: bold; font-size: 14px; border-top: 2px solid #333; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <div class="company-info">
+                <h1>${company.name}</h1>
+                <div>${company.address}</div>
+                <div>${company.zip} ${company.city}</div>
+                <div>Schweiz</div>
+                <br>
+                <div>E-Mail: ${company.email}</div>
+                ${company.phone ? `<div>Tel: ${company.phone}</div>` : ''}
+                ${company.uid ? `<div>UID: ${company.uid}</div>` : ''}
+                ${company.vat_number ? `<div>MWST-Nr: ${company.vat_number}</div>` : ''}
+                ${company.iban ? `<div>IBAN: ${company.iban}</div>` : ''}
+              </div>
+            </div>
+
+            <div class="invoice-title">Rechnung ${invoice.number}</div>
+
+            <div class="invoice-details">
+              <div>
+                <h3>Rechnungsadresse:</h3>
+                <div><strong>${invoice.customer?.name || 'Customer'}</strong></div>
+                ${invoice.customer?.company ? `<div>${invoice.customer.company}</div>` : ''}
+                <div>${invoice.customer?.address || 'Address'}</div>
+                <div>${invoice.customer?.zip || '0000'} ${invoice.customer?.city || 'City'}</div>
+                <div>${invoice.customer?.country || 'CH'}</div>
+              </div>
+              <div>
+                <table>
+                  <tr><td><strong>Rechnungsnummer:</strong></td><td>${invoice.number}</td></tr>
+                  <tr><td><strong>Rechnungsdatum:</strong></td><td>${new Date(invoice.date).toLocaleDateString('de-CH')}</td></tr>
+                  <tr><td><strong>Fälligkeitsdatum:</strong></td><td>${new Date(invoice.dueDate).toLocaleDateString('de-CH')}</td></tr>
+                  <tr><td><strong>QR-Referenz:</strong></td><td>${invoice.qrReference}</td></tr>
+                </table>
+              </div>
+            </div>
+
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th>Pos.</th>
+                  <th>Beschreibung</th>
+                  <th>Menge</th>
+                  <th>Einheit</th>
+                  <th>Preis (CHF)</th>
+                  <th>Betrag (CHF)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${invoice.items?.map((item, index) => `
+                  <tr>
+                    <td>${index + 1}</td>
+                    <td>${item.description}</td>
+                    <td>${item.quantity.toFixed(3)}</td>
+                    <td>${item.unit}</td>
+                    <td>${(item.unitPrice / 100).toFixed(2)}</td>
+                    <td>${(item.lineTotal / 100).toFixed(2)}</td>
+                  </tr>
+                `).join('') || '<tr><td colspan="6">No items</td></tr>'}
+              </tbody>
+            </table>
+
+            <div class="totals">
+              <table>
+                <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
+                <tr><td>MWST:</td><td>CHF ${(invoice.vatAmount / 100).toFixed(2)}</td></tr>
+                <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
+              </table>
+            </div>
+
+            <div style="margin-top: 40px; text-align: center;">
+              <img src="${qrCodeImage}" alt="Swiss QR Code" style="width: 140px; height: 140px;" />
+              <div style="margin-top: 10px; font-size: 10px;">Swiss QR Code</div>
+            </div>
+          </body>
+          </html>
+        `;
+                const htmlPdf = require('html-pdf-node');
+                const options = {
+                    format: 'A4',
+                    margin: { top: '20mm', bottom: '20mm', left: '20mm', right: '20mm' },
+                    printBackground: true,
+                    displayHeaderFooter: false,
+                    timeout: 10000
+                };
+                const file = { content: pdfContent };
+                const pdfBuffer = await htmlPdf.generatePdf(file, options);
+                const fileName = `invoice-${invoice.number}-${Date.now()}.pdf`;
+                const filePath = `invoices/${companyId}/${fileName}`;
+                const { data: uploadData, error: uploadError } = await supabase_1.supabaseAdmin.storage
+                    .from('invoices')
+                    .upload(filePath, pdfBuffer, {
+                    contentType: 'application/pdf',
+                    upsert: false
+                });
+                if (uploadError) {
+                    console.error('❌ Failed to upload PDF to storage:', uploadError);
+                }
+                else {
+                    console.log('✅ PDF uploaded successfully:', uploadData.path);
+                    const fileRecord = {
+                        invoice_id: invoice.id,
+                        file_name: fileName,
+                        file_path: filePath,
+                        file_size: pdfBuffer.length,
+                        mime_type: 'application/pdf',
+                        uploaded_at: new Date().toISOString()
+                    };
+                    console.log('📄 PDF file record:', fileRecord);
+                }
+            }
+        }
+        catch (pdfError) {
+            console.error('❌ Error generating PDF:', pdfError);
+        }
         res.status(201).json({
             success: true,
             message: 'Invoice created successfully',
@@ -514,7 +688,7 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
         customers (
           id, name, company, address, zip, city, country, email, phone, uid, vat_number
         ),
-        invoiceItems (
+        invoice_items (
           id, description, quantity, unit, unit_price, discount, vat_rate, line_total, vat_amount, sort_order
         )
       `)
@@ -741,16 +915,16 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
           </tr>
         </thead>
         <tbody>
-          ${invoice.invoiceItems?.map((item, index) => `
+          ${invoice.invoice_items?.map((item, index) => `
             <tr>
               <td>${index + 1}</td>
               <td>${item.description}</td>
-              <td class="number">${item.quantity.toFixed(3)}</td>
+              <td class="number">${(item.quantity / 1000).toFixed(3)}</td>
               <td>${item.unit}</td>
-              <td class="number">${item.unit_price.toFixed(2)}</td>
+              <td class="number">${(item.unit_price / 100).toFixed(2)}</td>
               <td class="number">${(item.discount / 100).toFixed(1)}%</td>
               <td class="number">${(item.vat_rate / 100).toFixed(1)}%</td>
-              <td class="number">${item.line_total.toFixed(2)}</td>
+              <td class="number">${(item.line_total / 100).toFixed(2)}</td>
             </tr>
           `).join('') || '<tr><td colspan="8">No items</td></tr>'}
         </tbody>
@@ -759,10 +933,10 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
       <!-- Totals -->
       <div class="totals">
         <table>
-          <tr><td>Zwischensumme:</td><td>CHF ${invoice.subtotal.toFixed(2)}</td></tr>
-          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${invoice.discount_amount.toFixed(2)}</td></tr>` : ''}
-          <tr><td>MWST:</td><td>CHF ${invoice.vat_amount.toFixed(2)}</td></tr>
-          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${invoice.total.toFixed(2)}</strong></td></tr>
+          <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
+          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${(invoice.discount_amount / 100).toFixed(2)}</td></tr>` : ''}
+          <tr><td>MWST:</td><td>CHF ${(invoice.vat_amount / 100).toFixed(2)}</td></tr>
+          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
         </table>
       </div>
 
@@ -955,6 +1129,7 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
     const companyId = req.user?.companyId;
     const invoiceId = req.params.id;
     const { level } = req.body;
+    console.log('📧 Reminder request:', { companyId, invoiceId, level });
     if (!companyId) {
         res.status(401).json({
             success: false,
@@ -963,6 +1138,7 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
         return;
     }
     try {
+        console.log('🔍 Looking up invoice:', { invoiceId, companyId });
         const { data: invoice, error: invoiceError } = await supabase_1.db.invoices()
             .select(`
         *,
@@ -973,39 +1149,35 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
             .eq('id', invoiceId)
             .eq('company_id', companyId)
             .single();
+        console.log('📋 Invoice lookup result:', { invoice, error: invoiceError });
         if (invoiceError || !invoice) {
+            console.log('❌ Invoice not found:', invoiceError);
             res.status(404).json({
                 success: false,
                 error: 'Invoice not found'
             });
             return;
         }
-        if (invoice.status === 'PAID' || invoice.status === 'CANCELLED') {
+        console.log('📊 Invoice status:', invoice.status);
+        if (invoice.status === 'CANCELLED') {
+            console.log('❌ Invoice is cancelled, cannot send reminder');
             res.status(400).json({
                 success: false,
-                error: 'Cannot send reminder for paid or cancelled invoice'
+                error: 'Cannot send reminder for cancelled invoice'
             });
             return;
         }
-        if (level < 1 || level > 3 || level <= (invoice.reminder_level || 0)) {
+        if (invoice.status === 'PAID') {
+            console.log('⚠️ Invoice is paid, but allowing reminder for testing');
+        }
+        if (level < 1 || level > 3) {
             res.status(400).json({
                 success: false,
-                error: 'Invalid reminder level'
+                error: 'Invalid reminder level (must be 1-3)'
             });
             return;
         }
-        if (invoice.last_reminder_at) {
-            const lastReminder = new Date(invoice.last_reminder_at);
-            const now = new Date();
-            const hoursSinceLastReminder = (now.getTime() - lastReminder.getTime()) / (1000 * 60 * 60);
-            if (hoursSinceLastReminder < 24) {
-                res.status(400).json({
-                    success: false,
-                    error: 'Reminder cooldown active (24h minimum between reminders)'
-                });
-                return;
-            }
-        }
+        console.log(`Sending reminder level ${level} for invoice ${invoice.number}`);
         const { data: updatedInvoice, error: updateError } = await supabase_1.db.invoices()
             .update({
             reminder_level: level,
@@ -1020,15 +1192,69 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
             (0, supabase_1.handleSupabaseError)(updateError, 'update reminder level');
             return;
         }
-        console.log(`Reminder ${level} sent for invoice ${invoice.number} to ${invoice.customers.email}`);
+        try {
+            const { Resend } = require('resend');
+            const resend = new Resend(process.env.RESEND_API_KEY);
+            const verifiedEmail = 'mkrshkov@gmail.com';
+            const result = await resend.emails.send({
+                from: 'invoSmart <onboarding@resend.dev>',
+                to: [verifiedEmail],
+                subject: `Reminder ${level} - Invoice ${invoice.number} Payment Due`,
+                html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <title>Payment Reminder</title>
+          </head>
+          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+              <h2 style="color: #2563eb; margin: 0;">Reminder ${level} - Invoice Payment Due</h2>
+            </div>
+            
+            <p>Dear ${invoice.customers.name},</p>
+            
+            <p>This is reminder ${level} for the following invoice:</p>
+            
+            <div style="background: #f1f5f9; padding: 15px; border-radius: 6px; margin: 20px 0;">
+              <p><strong>Invoice Number:</strong> ${invoice.number}</p>
+              <p><strong>Invoice Date:</strong> ${new Date(invoice.date).toLocaleDateString()}</p>
+              <p><strong>Due Date:</strong> ${new Date(invoice.due_date).toLocaleDateString()}</p>
+              <p><strong>Amount Due:</strong> CHF ${(invoice.total / 100).toFixed(2)}</p>
+            </div>
+            
+            <p>Please process payment at your earliest convenience.</p>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+              <p>Best regards,<br><strong>invoSmart Team</strong></p>
+              <p style="font-size: 12px; color: #6b7280;">
+                Test email sent to ${verifiedEmail}
+              </p>
+            </div>
+          </body>
+          </html>
+        `,
+                text: `Reminder ${level} - Invoice ${invoice.number} Payment Due\n\nDear ${invoice.customers.name},\n\nThis is reminder ${level} for the following invoice:\n\nInvoice Number: ${invoice.number}\nInvoice Date: ${new Date(invoice.date).toLocaleDateString()}\nDue Date: ${new Date(invoice.due_date).toLocaleDateString()}\nAmount Due: CHF ${(invoice.total / 100).toFixed(2)}\n\nPlease process payment at your earliest convenience.\n\nBest regards,\ninvoSmart Team\n\nTest email sent to ${verifiedEmail}`
+            });
+            if (result.data?.id) {
+                console.log(`✅ Reminder ${level} sent successfully to ${verifiedEmail} (Message ID: ${result.data.id})`);
+            }
+            else {
+                console.error(`❌ Failed to send reminder email:`, result.error);
+            }
+        }
+        catch (emailError) {
+            console.error('Error sending reminder email:', emailError);
+        }
         res.json({
             success: true,
-            message: `Reminder ${level} sent successfully`,
+            message: `Reminder ${level} sent successfully to mkrshkov@gmail.com`,
             data: {
                 invoice: updatedInvoice,
                 reminderLevel: level,
-                sentTo: invoice.customers.email,
-                sentAt: new Date().toISOString()
+                sentTo: 'mkrshkov@gmail.com',
+                sentAt: new Date().toISOString(),
+                testMode: true
             }
         });
     }
@@ -1395,6 +1621,9 @@ exports.updateInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         if (updateData.discountAmount !== undefined) {
             updateFields.discount_amount = updateData.discountAmount;
         }
+        if (updateData.internalNotes !== undefined) {
+            updateFields.internal_notes = updateData.internalNotes;
+        }
         const { data: updatedInvoice, error: updateError } = await supabase_1.db.invoices()
             .update(updateFields)
             .eq('id', invoiceId)
@@ -1415,13 +1644,13 @@ exports.updateInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             const itemsToInsert = updateData.items.map((item, index) => ({
                 invoice_id: invoiceId,
                 description: item.description,
-                quantity: item.quantity,
+                quantity: Math.round(item.quantity * 1000),
                 unit: item.unit || 'Stück',
-                unit_price: item.unitPrice,
-                discount: (item.discount || 0) * 100,
-                vat_rate: item.vatRate * 100,
-                line_total: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100),
-                vat_amount: item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * (item.vatRate / 100),
+                unit_price: Math.round(item.unitPrice * 100),
+                discount: Math.round((item.discount || 0) * 100),
+                vat_rate: Math.round(item.vatRate * 100),
+                line_total: Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * 100),
+                vat_amount: Math.round(item.quantity * item.unitPrice * (1 - (item.discount || 0) / 100) * (item.vatRate / 100) * 100),
                 sort_order: index
             }));
             const { error: itemsError } = await supabase_1.db.invoiceItems()

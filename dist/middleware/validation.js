@@ -124,6 +124,7 @@ exports.schemas = {
         status: joi_1.default.string().valid('DRAFT', 'SENT', 'PAID', 'OVERDUE').optional(),
         discountCode: joi_1.default.string().optional(),
         discountAmount: joi_1.default.number().min(0).optional(),
+        internalNotes: joi_1.default.string().allow('').optional(),
         items: joi_1.default.array().items(joi_1.default.object({
             description: joi_1.default.string().min(1).max(500).required(),
             quantity: joi_1.default.number().positive().required(),

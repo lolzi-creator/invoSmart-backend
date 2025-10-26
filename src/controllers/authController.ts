@@ -2,7 +2,7 @@ import { Request, Response } from 'express'
 import * as jwt from 'jsonwebtoken'
 import bcrypt from 'bcryptjs'
 import { asyncHandler } from '../middleware/errorHandler'
-import { AuthenticatedRequest } from '../middleware/auth'
+import { AuthenticatedRequest } from '../types'
 import { config } from '../config'
 import {
   User,

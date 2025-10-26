@@ -1,7 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deletePayment = exports.updatePayment = exports.getPaymentStats = exports.debugPaymentMatching = exports.runAutoMatch = exports.importPaymentsCAMT053 = exports.importPaymentsMT940 = exports.importPaymentsCSV = exports.importPayments = exports.matchPayment = exports.createPayment = exports.getPayment = exports.getPayments = void 0;
+exports.deletePayment = exports.updatePayment = exports.getPaymentStats = exports.debugPaymentMatching = exports.getPaymentSuggestions = exports.runAutoMatch = exports.importPaymentsCAMT053 = exports.importPaymentsMT940 = exports.importPaymentsCSV = exports.importPayments = exports.matchPayment = exports.createPayment = exports.getPaymentsByInvoice = exports.getPayment = exports.getPayments = void 0;
 const errorHandler_1 = require("../middleware/errorHandler");
+const types_1 = require("../types");
 const supabase_1 = require("../lib/supabase");
 const createPaymentResponse = (dbPayment) => {
     return {
@@ -22,65 +23,201 @@ const createPaymentResponse = (dbPayment) => {
     };
 };
 const findMatchingInvoice = async (payment, companyId) => {
-    if (payment.reference) {
-        const cleanReference = payment.reference.replace(/\s/g, '');
-        console.log('Looking for QR match:', {
-            paymentReference: cleanReference,
-            companyId: companyId
-        });
-        const { data: allInvoices } = await supabase_1.db.invoices()
-            .select('id, number, qr_reference, total')
-            .eq('company_id', companyId);
-        console.log('Available invoices for matching:', allInvoices?.map(inv => ({
-            number: inv.number,
-            qr_reference: inv.qr_reference,
-            total: inv.total
-        })));
-        const { data: qrInvoices, error: qrError } = await supabase_1.db.invoices()
-            .select('*')
-            .eq('company_id', companyId)
-            .eq('qr_reference', cleanReference);
-        console.log('QR search result:', {
-            found: qrInvoices && qrInvoices.length > 0,
-            error: qrError?.message,
-            count: qrInvoices?.length || 0,
-            invoiceNumbers: qrInvoices?.map(inv => inv.number) || []
-        });
-        if (qrInvoices && qrInvoices.length > 0) {
-            const qrInvoice = qrInvoices[0];
-            console.log('HIGH confidence match found:', qrInvoice.number);
-            return { invoice: qrInvoice, confidence: 'HIGH' };
+    console.log('Enhanced matching for payment:', {
+        id: payment.id,
+        amount: payment.amount,
+        reference: payment.reference,
+        valueDate: payment.value_date,
+        description: payment.description
+    });
+    console.log('Payment data types:', {
+        amountType: typeof payment.amount,
+        amountValue: payment.amount,
+        referenceType: typeof payment.reference,
+        referenceValue: payment.reference,
+        valueDateType: typeof payment.value_date,
+        valueDateValue: payment.value_date
+    });
+    const { data: allInvoices, error: invoicesError } = await supabase_1.db.invoices()
+        .select(`
+      *,
+      customers (
+        id, name, company, email
+      )
+    `)
+        .eq('company_id', companyId)
+        .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE', 'PAID']);
+    if (invoicesError || !allInvoices) {
+        console.error('Error fetching invoices:', invoicesError);
+        return { confidence: 'MANUAL' };
+    }
+    console.log(`Found ${allInvoices.length} open invoices to match against`);
+    console.log('Available invoices for matching:', allInvoices.map(inv => ({
+        id: inv.id,
+        number: inv.number,
+        qr_reference: inv.qr_reference,
+        total: inv.total,
+        due_date: inv.due_date,
+        status: inv.status,
+        customer_id: inv.customer_id,
+        has_customer: !!inv.customers
+    })));
+    const matchScores = [];
+    for (const invoice of allInvoices) {
+        const score = calculateMatchScore(payment, invoice);
+        if (score.score > 0) {
+            matchScores.push(score);
         }
     }
-    const dayBefore = new Date(payment.value_date);
-    dayBefore.setDate(dayBefore.getDate() - 1);
-    const dayAfter = new Date(payment.value_date);
-    dayAfter.setDate(dayAfter.getDate() + 1);
-    const { data: amountDateInvoices } = await supabase_1.db.invoices()
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('total', payment.amount)
-        .gte('due_date', dayBefore.toISOString().split('T')[0])
-        .lte('due_date', dayAfter.toISOString().split('T')[0])
-        .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE']);
-    if (amountDateInvoices && amountDateInvoices.length === 1) {
+    matchScores.sort((a, b) => b.score - a.score);
+    console.log('Match scores:', matchScores.map(ms => ({
+        invoiceNumber: ms.invoice.number,
+        score: ms.score,
+        maxScore: ms.maxScore,
+        confidence: ms.confidence,
+        criteria: ms.criteria
+    })));
+    const bestMatch = matchScores[0];
+    if (bestMatch && bestMatch.confidence !== types_1.MatchConfidence.MANUAL) {
+        console.log('Auto-matching payment to invoice:', bestMatch.invoice.number);
         return {
-            invoice: amountDateInvoices[0],
-            confidence: 'MEDIUM'
+            invoice: bestMatch.invoice,
+            confidence: bestMatch.confidence
         };
     }
-    const { data: amountInvoices } = await supabase_1.db.invoices()
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('total', payment.amount)
-        .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE']);
-    if (amountInvoices && amountInvoices.length === 1) {
-        return {
-            invoice: amountInvoices[0],
-            confidence: 'LOW'
-        };
+    return { confidence: types_1.MatchConfidence.MANUAL };
+};
+const calculateMatchScore = (payment, invoice) => {
+    console.log(`\n--- Calculating match score for invoice ${invoice.number} ---`);
+    console.log('Invoice data:', {
+        id: invoice.id,
+        number: invoice.number,
+        qr_reference: invoice.qr_reference,
+        total: invoice.total,
+        due_date: invoice.due_date,
+        status: invoice.status,
+        has_customer: !!invoice.customers
+    });
+    const criteria = {
+        reference: false,
+        amount: false,
+        date: false,
+        customer: false
+    };
+    let score = 0;
+    let maxScore = 0;
+    maxScore += 40;
+    console.log('1. Reference matching:');
+    console.log('  Payment reference:', payment.reference);
+    console.log('  Invoice QR reference:', invoice.qr_reference);
+    console.log('  Invoice number:', invoice.number);
+    if (payment.reference) {
+        const cleanReference = payment.reference.replace(/\s/g, '');
+        console.log('  Clean reference:', cleanReference);
+        if (invoice.qr_reference && invoice.qr_reference === cleanReference) {
+            score += 40;
+            criteria.reference = true;
+            console.log('  ✓ QR reference exact match (+40)');
+        }
+        else if (invoice.number === cleanReference) {
+            score += 40;
+            criteria.reference = true;
+            console.log('  ✓ Invoice number exact match (+40)');
+        }
+        else if (invoice.qr_reference && invoice.qr_reference.includes(cleanReference)) {
+            score += 25;
+            criteria.reference = true;
+            console.log('  ✓ QR reference partial match (+25)');
+        }
+        else if (cleanReference.includes(invoice.number)) {
+            score += 25;
+            criteria.reference = true;
+            console.log('  ✓ Reference contains invoice number (+25)');
+        }
+        else {
+            console.log('  ✗ No reference match');
+        }
     }
-    return { confidence: 'MANUAL' };
+    else {
+        console.log('  ✗ No payment reference');
+    }
+    maxScore += 30;
+    console.log('2. Amount matching:');
+    console.log('  Payment amount:', payment.amount, typeof payment.amount);
+    console.log('  Invoice total:', invoice.total, typeof invoice.total);
+    console.log('  Amount difference:', Math.abs(payment.amount - invoice.total));
+    if (payment.amount === invoice.total) {
+        score += 30;
+        criteria.amount = true;
+        console.log('  ✓ Exact amount match (+30)');
+    }
+    else if (Math.abs(payment.amount - invoice.total) <= 1) {
+        score += 25;
+        criteria.amount = true;
+        console.log('  ✓ Amount match within tolerance (+25)');
+    }
+    else {
+        console.log('  ✗ No amount match');
+    }
+    maxScore += 20;
+    const paymentDate = new Date(payment.value_date);
+    const invoiceDueDate = new Date(invoice.due_date);
+    if (paymentDate.toDateString() === invoiceDueDate.toDateString()) {
+        score += 20;
+        criteria.date = true;
+    }
+    else if (Math.abs(paymentDate.getTime() - invoiceDueDate.getTime()) <= 3 * 24 * 60 * 60 * 1000) {
+        score += 15;
+        criteria.date = true;
+    }
+    else if (Math.abs(paymentDate.getTime() - invoiceDueDate.getTime()) <= 7 * 24 * 60 * 60 * 1000) {
+        score += 10;
+        criteria.date = true;
+    }
+    maxScore += 10;
+    if (payment.description && invoice.customers) {
+        const customerName = invoice.customers.name || '';
+        const customerCompany = invoice.customers.company || '';
+        const description = payment.description.toLowerCase();
+        if (customerName && description.includes(customerName.toLowerCase())) {
+            score += 10;
+            criteria.customer = true;
+        }
+        else if (customerCompany && description.includes(customerCompany.toLowerCase())) {
+            score += 10;
+            criteria.customer = true;
+        }
+    }
+    const matchPercentage = (score / maxScore) * 100;
+    const matchedCriteria = Object.values(criteria).filter(Boolean).length;
+    console.log('Final scoring:');
+    console.log('  Score:', score, '/', maxScore);
+    console.log('  Match percentage:', matchPercentage.toFixed(1) + '%');
+    console.log('  Matched criteria:', matchedCriteria);
+    console.log('  Criteria details:', criteria);
+    let confidence = types_1.MatchConfidence.MANUAL;
+    if (matchPercentage >= 80 || matchedCriteria >= 3) {
+        confidence = types_1.MatchConfidence.HIGH;
+        console.log('  → HIGH confidence');
+    }
+    else if (matchPercentage >= 60 || matchedCriteria >= 2) {
+        confidence = types_1.MatchConfidence.MEDIUM;
+        console.log('  → MEDIUM confidence');
+    }
+    else if (matchPercentage >= 40 || matchedCriteria >= 1) {
+        confidence = types_1.MatchConfidence.LOW;
+        console.log('  → LOW confidence');
+    }
+    else {
+        console.log('  → MANUAL confidence');
+    }
+    return {
+        invoice,
+        score,
+        maxScore,
+        criteria,
+        confidence
+    };
 };
 const updateInvoiceAfterPayment = async (invoiceId) => {
     const { data: invoice } = await supabase_1.db.invoices()
@@ -118,9 +255,10 @@ exports.getPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         return;
     }
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 5;
     const isMatched = req.query.isMatched === 'true' ? true : req.query.isMatched === 'false' ? false : undefined;
     const confidence = req.query.confidence;
+    const dateRange = req.query.dateRange;
     const sortBy = req.query.sortBy || 'value_date';
     const sortOrder = req.query.sortOrder || 'desc';
     try {
@@ -132,6 +270,28 @@ exports.getPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         }
         if (confidence) {
             query = query.eq('confidence', confidence);
+        }
+        if (dateRange) {
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            if (dateRange === 'thisWeek') {
+                const monday = new Date(today);
+                monday.setDate(today.getDate() - today.getDay() + 1);
+                const sunday = new Date(monday);
+                sunday.setDate(monday.getDate() + 6);
+                query = query
+                    .gte('value_date', monday.toISOString().split('T')[0])
+                    .lte('value_date', sunday.toISOString().split('T')[0]);
+            }
+            else if (dateRange === 'lastWeek') {
+                const lastMonday = new Date(today);
+                lastMonday.setDate(today.getDate() - today.getDay() - 6);
+                const lastSunday = new Date(lastMonday);
+                lastSunday.setDate(lastMonday.getDate() + 6);
+                query = query
+                    .gte('value_date', lastMonday.toISOString().split('T')[0])
+                    .lte('value_date', lastSunday.toISOString().split('T')[0]);
+            }
         }
         const ascending = sortOrder === 'asc';
         query = query.order(sortBy, { ascending });
@@ -192,6 +352,36 @@ exports.getPayment = (0, errorHandler_1.asyncHandler)(async (req, res) => {
     }
     catch (error) {
         (0, supabase_1.handleSupabaseError)(error, 'get payment');
+    }
+});
+exports.getPaymentsByInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
+    const companyId = req.user?.companyId;
+    const invoiceId = req.params.invoiceId;
+    if (!companyId) {
+        res.status(401).json({
+            success: false,
+            error: 'Authentication required'
+        });
+        return;
+    }
+    try {
+        const { data, error } = await supabase_1.db.payments()
+            .select('*')
+            .eq('company_id', companyId)
+            .eq('invoice_id', invoiceId)
+            .order('value_date', { ascending: false });
+        if (error) {
+            (0, supabase_1.handleSupabaseError)(error, 'get payments by invoice');
+            return;
+        }
+        const payments = data.map(createPaymentResponse);
+        res.json({
+            success: true,
+            data: { payments }
+        });
+    }
+    catch (error) {
+        (0, supabase_1.handleSupabaseError)(error, 'get payments by invoice');
     }
 });
 exports.createPayment = (0, errorHandler_1.asyncHandler)(async (req, res) => {
@@ -570,12 +760,12 @@ exports.importPaymentsMT940 = (0, errorHandler_1.asyncHandler)(async (req, res) 
                     reference: '',
                     description: ''
                 };
-                const match = line.match(/:61:(\d{6})(\d{4})([CD])(\d+),(\d+)/);
+                const match = line.match(/:61:(\d{6})(\d{4})([CD])(\d+(?:\.\d{2})?)NTRF[^/]*\/\/([^:]+)/);
                 if (match) {
                     const [, date, time, dc, amount, ref] = match;
                     currentPayment.valueDate = `20${date.substring(0, 2)}-${date.substring(2, 4)}-${date.substring(4, 6)}`;
-                    currentPayment.amount = parseInt(amount) * (dc === 'C' ? 1 : -1);
-                    currentPayment.reference = ref;
+                    currentPayment.amount = Math.round(parseFloat(amount) * 100) * (dc === 'C' ? 1 : -1);
+                    currentPayment.reference = ref.trim();
                 }
             }
             else if (line.startsWith(':86:') && currentPayment) {
@@ -787,6 +977,86 @@ exports.runAutoMatch = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Failed to run auto-matching'
+        });
+    }
+});
+exports.getPaymentSuggestions = (0, errorHandler_1.asyncHandler)(async (req, res) => {
+    const companyId = req.user?.companyId;
+    const paymentId = req.params.id;
+    if (!companyId) {
+        res.status(401).json({
+            success: false,
+            error: 'Authentication required'
+        });
+        return;
+    }
+    try {
+        const { data: payment, error: paymentError } = await supabase_1.db.payments()
+            .select('*')
+            .eq('id', paymentId)
+            .eq('company_id', companyId)
+            .single();
+        if (paymentError || !payment) {
+            res.status(404).json({
+                success: false,
+                error: 'Payment not found'
+            });
+            return;
+        }
+        const { data: allInvoices, error: invoicesError } = await supabase_1.db.invoices()
+            .select(`
+        *,
+        customers (
+          id, name, company, email
+        )
+      `)
+            .eq('company_id', companyId)
+            .in('status', ['OPEN', 'PARTIAL_PAID', 'OVERDUE', 'PAID']);
+        if (invoicesError || !allInvoices) {
+            res.status(400).json({
+                success: false,
+                error: 'Failed to fetch invoices'
+            });
+            return;
+        }
+        const suggestions = [];
+        for (const invoice of allInvoices) {
+            const score = calculateMatchScore(payment, invoice);
+            if (score.score > 0) {
+                suggestions.push(score);
+            }
+        }
+        suggestions.sort((a, b) => b.score - a.score);
+        const topSuggestions = suggestions.slice(0, 5);
+        res.json({
+            success: true,
+            data: {
+                payment: createPaymentResponse(payment),
+                suggestions: topSuggestions.map(suggestion => ({
+                    invoice: {
+                        id: suggestion.invoice.id,
+                        number: suggestion.invoice.number,
+                        total: suggestion.invoice.total,
+                        dueDate: suggestion.invoice.due_date,
+                        customer: suggestion.invoice.customers ? {
+                            name: suggestion.invoice.customers.name,
+                            company: suggestion.invoice.customers.company
+                        } : null
+                    },
+                    score: suggestion.score,
+                    maxScore: suggestion.maxScore,
+                    matchPercentage: Math.round((suggestion.score / suggestion.maxScore) * 100),
+                    criteria: suggestion.criteria,
+                    confidence: suggestion.confidence
+                }))
+            }
+        });
+    }
+    catch (error) {
+        console.error('Error getting payment suggestions:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get payment suggestions'
         });
     }
 });

@@ -25,6 +25,7 @@ exports.db = {
     vatRates: () => exports.supabaseAdmin.from('vat_rates'),
     discountCodes: () => exports.supabaseAdmin.from('discount_codes'),
     emailTemplates: () => exports.supabaseAdmin.from('email_templates'),
+    expenses: () => exports.supabaseAdmin.from('expenses'),
     invoiceOverview: () => exports.supabaseAdmin.from('invoice_overview'),
     paymentStats: () => exports.supabaseAdmin.from('payment_stats')
 };

@@ -1,11 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import { config } from '../config'
-import { User, UserRole } from '../types'
-
-export interface AuthenticatedRequest extends Request {
-  user?: User
-}
+import { User, UserRole, AuthenticatedRequest } from '../types'
 
 export const authenticateToken = (
   req: AuthenticatedRequest,
@@ -46,7 +42,7 @@ export const requireRole = (roles: UserRole[]) => {
       return
     }
 
-    if (!roles.includes(req.user.role)) {
+    if (!roles.includes(req.user.role as UserRole)) {
       res.status(403).json({
         success: false,
         error: 'Insufficient permissions'

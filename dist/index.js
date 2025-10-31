@@ -121,7 +121,7 @@ app.post('/api/v1/test-email', async (req, res) => {
         const { Resend } = require('resend');
         const resend = new Resend(process.env.RESEND_API_KEY);
         const result = await resend.emails.send({
-            from: 'invoSmart <onboarding@resend.dev>',
+            from: `${config_1.config.email.fromName} <${config_1.config.email.fromEmail}>`,
             to: ['mkrshkov@gmail.com'],
             subject: `Zahlungserinnerung - Rechnung ${invoiceData.number}`,
             html: `

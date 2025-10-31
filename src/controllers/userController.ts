@@ -80,11 +80,32 @@ export const inviteUser = async (req: AuthenticatedRequest, res: Response) => {
       })
     }
 
-    // Generate secure invitation token
-    const token = Buffer.from(`${companyId}-${email}-${Date.now()}-${Math.random()}`)
-      .toString('base64')
-      .replace(/[^a-zA-Z0-9]/g, '')
-      .substring(0, 64)
+    // Generate secure invitation token (using crypto for better uniqueness)
+    const crypto = require('crypto')
+    let token: string = ''
+    let tokenExists = true
+    let attempts = 0
+    const maxAttempts = 5
+
+    // Generate unique token with retry logic
+    while (tokenExists && attempts < maxAttempts) {
+      token = crypto.randomBytes(32).toString('base64url')
+      
+      // Check if token already exists
+      const { data: existingToken } = await supabaseAdmin
+        .from('user_invitations')
+        .select('id')
+        .eq('token', token)
+        .single()
+      
+      tokenExists = !!existingToken
+      attempts++
+    }
+
+    if (tokenExists || !token) {
+      // Fallback to timestamp-based token with more entropy if all crypto attempts failed
+      token = crypto.randomBytes(16).toString('hex') + '-' + Date.now() + '-' + Math.random().toString(36).substring(2, 15)
+    }
 
     // Token expires in 7 days
     const expiresAt = new Date()
@@ -341,6 +362,7 @@ export const reactivateUser = async (req: AuthenticatedRequest, res: Response) =
     return res.status(500).json({ success: false, message: 'Internal server error' })
   }
 }
+
 
 
 

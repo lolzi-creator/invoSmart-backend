@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteInvoice = exports.updateInvoice = exports.generateReminderPdf = exports.sendInvoiceReminder = exports.generateInvoicePdf = exports.generateInvoiceQR = exports.getInvoiceStats = exports.updateInvoiceStatus = exports.createInvoice = exports.getInvoice = exports.getInvoices = void 0;
 const errorHandler_1 = require("../middleware/errorHandler");
+const config_1 = require("../config");
 const supabase_1 = require("../lib/supabase");
 const createInvoiceResponse = (dbInvoice, customer, company, items) => {
     return {
@@ -420,6 +421,43 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                 console.error('❌ Company not found for PDF generation:', companyError);
             }
             else {
+                let logoBase64 = null;
+                if (company.logo_url) {
+                    try {
+                        console.log('🔍 Attempting to fetch logo for invoice creation PDF. Logo URL:', company.logo_url);
+                        let logoPath = null;
+                        if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+                            logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0];
+                        }
+                        else if (company.logo_url.includes('/logos/')) {
+                            logoPath = company.logo_url.split('/logos/')[1].split('?')[0];
+                        }
+                        else if (company.logo_url.startsWith('logos/')) {
+                            logoPath = company.logo_url.replace('logos/', '').split('?')[0];
+                        }
+                        else {
+                            logoPath = company.logo_url.split('?')[0];
+                        }
+                        console.log('📂 Extracted logo path for invoice creation:', logoPath);
+                        if (logoPath) {
+                            const { data: logoData, error: logoError } = await supabase_1.supabaseAdmin.storage
+                                .from('logos')
+                                .download(logoPath);
+                            if (logoError) {
+                                console.error('❌ Error downloading logo for invoice creation:', logoError);
+                            }
+                            else if (logoData) {
+                                const logoBuffer = Buffer.from(await logoData.arrayBuffer());
+                                const logoMimeType = logoData.type || 'image/png';
+                                logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`;
+                                console.log('✅ Logo converted to base64 for invoice creation PDF');
+                            }
+                        }
+                    }
+                    catch (logoFetchError) {
+                        console.error('❌ Error fetching logo for invoice creation PDF:', logoFetchError);
+                    }
+                }
                 const QRCode = require('qrcode');
                 const qrReference = invoice.qrReference;
                 const qrPayload = [
@@ -451,6 +489,7 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
               body { font-family: Arial, sans-serif; margin: 0; padding: 20px; font-size: 12px; color: #333; }
               .header { display: flex; justify-content: space-between; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #e5e5e5; }
               .company-info { flex: 1; }
+              .logo { width: 100px; height: 100px; background: transparent; display: flex; align-items: center; justify-content: center; padding: 5px; }
               .invoice-title { font-size: 24px; font-weight: bold; color: #2563eb; margin: 20px 0; }
               .invoice-details { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-bottom: 30px; }
               .items-table { width: 100%; border-collapse: collapse; margin: 30px 0; }
@@ -475,6 +514,9 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                 ${company.uid ? `<div>UID: ${company.uid}</div>` : ''}
                 ${company.vat_number ? `<div>MWST-Nr: ${company.vat_number}</div>` : ''}
                 ${company.iban ? `<div>IBAN: ${company.iban}</div>` : ''}
+              </div>
+              <div class="logo">
+                ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 100px; max-height: 100px; width: 100px; height: 100px; object-fit: contain; display: block;">` : ''}
               </div>
             </div>
 
@@ -846,6 +888,52 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
             });
             return;
         }
+        let logoBase64 = null;
+        if (company.logo_url) {
+            try {
+                console.log('🔍 Attempting to fetch logo for PDF. Logo URL:', company.logo_url);
+                let logoPath = null;
+                if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+                    logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0];
+                }
+                else if (company.logo_url.includes('/logos/')) {
+                    logoPath = company.logo_url.split('/logos/')[1].split('?')[0];
+                }
+                else if (company.logo_url.startsWith('logos/')) {
+                    logoPath = company.logo_url.replace('logos/', '').split('?')[0];
+                }
+                else {
+                    logoPath = company.logo_url.split('?')[0];
+                }
+                console.log('📂 Extracted logo path:', logoPath);
+                if (logoPath) {
+                    const { data: logoData, error: logoError } = await supabase_1.supabaseAdmin.storage
+                        .from('logos')
+                        .download(logoPath);
+                    if (logoError) {
+                        console.error('❌ Error downloading logo from storage:', logoError);
+                    }
+                    else if (logoData) {
+                        const logoBuffer = Buffer.from(await logoData.arrayBuffer());
+                        const logoMimeType = logoData.type || 'image/png';
+                        logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`;
+                        console.log('✅ Logo converted to base64 for PDF. Size:', logoBuffer.length, 'bytes');
+                    }
+                    else {
+                        console.warn('⚠️ Logo data is null/undefined');
+                    }
+                }
+                else {
+                    console.warn('⚠️ Could not extract logo path from URL:', company.logo_url);
+                }
+            }
+            catch (logoFetchError) {
+                console.error('❌ Error fetching logo for PDF:', logoFetchError);
+            }
+        }
+        else {
+            console.log('ℹ️ No logo_url found in company data');
+        }
         const QRCode = require('qrcode');
         const qrReference = invoice.qr_reference;
         const qrPayload = [
@@ -1002,7 +1090,7 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
           ${company.iban ? `<div>IBAN: ${company.iban}</div>` : ''}
         </div>
         <div class="logo">
-          ${company.logo_url ? `<img src="${company.logo_url}" alt="Logo" style="max-width: 100%; max-height: 100%;">` : '[LOGO]'}
+          ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 220px; max-height: 150px; width: auto; height: auto; object-fit: contain; display: block;">` : ''}
         </div>
       </div>
 
@@ -1822,7 +1910,7 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
             const paidAmountCHF = (invoice.paid_amount || 0) / 100;
             const remainingAmountCHF = totalAmountCHF - paidAmountCHF;
             const emailData = {
-                from: 'invoSmart <onboarding@resend.dev>',
+                from: `${config_1.config.email.fromName} <${config_1.config.email.fromEmail}>`,
                 to: [verifiedEmail],
                 subject: `${level}. Mahnung - Rechnung ${invoice.number}`,
                 html: `
@@ -1942,6 +2030,43 @@ exports.generateReminderPdf = (0, errorHandler_1.asyncHandler)(async (req, res) 
                 error: 'Company not found'
             });
             return;
+        }
+        let logoBase64 = null;
+        if (company.logo_url) {
+            try {
+                console.log('🔍 Attempting to fetch logo for reminder PDF. Logo URL:', company.logo_url);
+                let logoPath = null;
+                if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+                    logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0];
+                }
+                else if (company.logo_url.includes('/logos/')) {
+                    logoPath = company.logo_url.split('/logos/')[1].split('?')[0];
+                }
+                else if (company.logo_url.startsWith('logos/')) {
+                    logoPath = company.logo_url.replace('logos/', '').split('?')[0];
+                }
+                else {
+                    logoPath = company.logo_url.split('?')[0];
+                }
+                console.log('📂 Extracted logo path for reminder:', logoPath);
+                if (logoPath) {
+                    const { data: logoData, error: logoError } = await supabase_1.supabaseAdmin.storage
+                        .from('logos')
+                        .download(logoPath);
+                    if (logoError) {
+                        console.error('❌ Error downloading logo for reminder:', logoError);
+                    }
+                    else if (logoData) {
+                        const logoBuffer = Buffer.from(await logoData.arrayBuffer());
+                        const logoMimeType = logoData.type || 'image/png';
+                        logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`;
+                        console.log('✅ Logo converted to base64 for reminder PDF');
+                    }
+                }
+            }
+            catch (logoFetchError) {
+                console.error('❌ Error fetching logo for reminder PDF:', logoFetchError);
+            }
         }
         const reminderTemplates = {
             1: {
@@ -2074,7 +2199,7 @@ Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen
           ${company.uid ? `<div>UID: ${company.uid}</div>` : ''}
         </div>
         <div class="logo">
-          ${company.logo_url ? `<img src="${company.logo_url}" alt="Logo" style="max-width: 100%; max-height: 100%;">` : '[LOGO]'}
+          ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 220px; max-height: 150px; width: auto; height: auto; object-fit: contain; display: block;">` : ''}
         </div>
       </div>
 

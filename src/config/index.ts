@@ -46,7 +46,10 @@ export const config = {
       reduced: 2.5,
       exempt: 0
     }
-  }
+  },
+  
+  // Frontend URL (for generating acceptance links, etc.)
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173'
 }
 
 // Validate required environment variables

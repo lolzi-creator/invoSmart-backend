@@ -268,7 +268,9 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
 
     // Generate acceptance token
     const acceptanceToken = Buffer.from(`${companyId}-${Date.now()}`).toString('base64').replace(/[^a-zA-Z0-9]/g, '')
-    const acceptanceLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/quotes/accept/${acceptanceToken}`
+    // Get frontend URL from config (set via FRONTEND_URL env variable)
+    const { config } = require('../config/index')
+    const acceptanceLink = `${config.frontendUrl}/quotes/accept/${acceptanceToken}`
 
     // Insert quote
     const { data: quote, error: quoteError } = await db.quotes()

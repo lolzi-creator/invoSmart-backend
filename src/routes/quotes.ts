@@ -9,7 +9,8 @@ import {
   deleteQuote,
   getQuoteByToken,
   acceptQuote,
-  downloadQuotePDF
+  downloadQuotePDF,
+  regenerateAcceptanceLink
 } from '../controllers/quoteController'
 import { authenticateToken } from '../middleware/auth'
 import { validateRequest, schemas } from '../middleware/validation'
@@ -29,6 +30,13 @@ router.use(authenticateToken)
  * @access  Private
  */
 router.get('/', getQuotes)
+
+/**
+ * @route   POST /api/v1/quotes/:id/regenerate-link
+ * @desc    Regenerate acceptance link for a quote
+ * @access  Private
+ */
+router.post('/:id/regenerate-link', regenerateAcceptanceLink)
 
 /**
  * @route   GET /api/v1/quotes/:id

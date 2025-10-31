@@ -2,6 +2,7 @@ import { Response } from 'express'
 import { asyncHandler } from '../middleware/errorHandler'
 import { db, handleSupabaseError, supabaseAdmin } from '../lib/supabase'
 import { Quote, QuoteItem, AuthenticatedRequest } from '../types'
+import { config } from '../config'
 
 // Helper function to convert DB quote to API quote
 const createQuoteResponse = (dbQuote: any, customer?: any, company?: any, items?: any[]): Quote => {
@@ -61,7 +62,19 @@ const createQuoteResponse = (dbQuote: any, customer?: any, company?: any, items?
     discountAmount: dbQuote.discount_amount / 100,
     internalNotes: dbQuote.internal_notes || undefined,
     acceptanceToken: dbQuote.acceptance_token || undefined,
-    acceptanceLink: dbQuote.acceptance_link || undefined,
+    // Regenerate acceptance link if it's invalid (undefined, null, or starts with "undefined")
+    acceptanceLink: (() => {
+      const link = dbQuote.acceptance_link
+      if (!link || link === 'undefined' || link.startsWith('undefined/')) {
+        // Regenerate link if invalid
+        if (dbQuote.acceptance_token) {
+          const frontendUrl = process.env.FRONTEND_URL || config.frontendUrl || 'http://localhost:5173'
+          return `${frontendUrl}/quotes/accept/${dbQuote.acceptance_token}`
+        }
+        return undefined
+      }
+      return link
+    })(),
     acceptedAt: dbQuote.accepted_at ? new Date(dbQuote.accepted_at) : undefined,
     acceptedByEmail: dbQuote.accepted_by_email || undefined,
     sentAt: dbQuote.sent_at ? new Date(dbQuote.sent_at) : undefined,
@@ -269,8 +282,10 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
     // Generate acceptance token
     const acceptanceToken = Buffer.from(`${companyId}-${Date.now()}`).toString('base64').replace(/[^a-zA-Z0-9]/g, '')
     // Get frontend URL from config (set via FRONTEND_URL env variable)
-    const { config } = require('../config/index')
-    const acceptanceLink = `${config.frontendUrl}/quotes/accept/${acceptanceToken}`
+    // Use environment variable directly with fallback
+    const frontendUrl = process.env.FRONTEND_URL || config.frontendUrl || 'http://localhost:5173'
+    console.log('[Quote] Generating acceptance link with FRONTEND_URL:', frontendUrl)
+    const acceptanceLink = `${frontendUrl}/quotes/accept/${acceptanceToken}`
 
     // Insert quote
     const { data: quote, error: quoteError } = await db.quotes()
@@ -1349,6 +1364,96 @@ export const deleteQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
 
   } catch (error) {
     handleSupabaseError(error, 'delete quote')
+  }
+})
+
+/**
+ * @desc    Regenerate acceptance link for a quote
+ * @route   POST /api/v1/quotes/:id/regenerate-link
+ * @access  Private
+ */
+export const regenerateAcceptanceLink = asyncHandler(async (req: AuthenticatedRequest, res: Response) => {
+  const companyId = req.user?.companyId
+  const quoteId = req.params.id
+
+  if (!companyId) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    })
+    return
+  }
+
+  try {
+    // Get existing quote
+    const { data: quoteData, error: quoteError } = await db.quotes()
+      .select('id, acceptance_token, company_id')
+      .eq('id', quoteId)
+      .eq('company_id', companyId)
+      .single()
+
+    if (quoteError || !quoteData) {
+      res.status(404).json({
+        success: false,
+        error: 'Quote not found'
+      })
+      return
+    }
+
+    // Check if quote has already been accepted
+    const { data: fullQuote } = await db.quotes()
+      .select('status')
+      .eq('id', quoteId)
+      .single()
+
+    if (fullQuote?.status === 'ACCEPTED' || fullQuote?.status === 'CONVERTED') {
+      res.status(400).json({
+        success: false,
+        error: 'Cannot regenerate link for already accepted quote'
+      })
+      return
+    }
+
+    // Generate new acceptance token if needed, or reuse existing one
+    let acceptanceToken = quoteData.acceptance_token
+    if (!acceptanceToken) {
+      acceptanceToken = Buffer.from(`${companyId}-${Date.now()}`).toString('base64').replace(/[^a-zA-Z0-9]/g, '')
+    }
+
+    // Generate new acceptance link
+    const frontendUrl = process.env.FRONTEND_URL || config.frontendUrl || 'http://localhost:5173'
+    const acceptanceLink = `${frontendUrl}/quotes/accept/${acceptanceToken}`
+
+    // Update quote with new link (and token if it was missing)
+    const updateData: any = {
+      acceptance_link: acceptanceLink
+    }
+    if (!quoteData.acceptance_token) {
+      updateData.acceptance_token = acceptanceToken
+    }
+
+    const { data: updatedQuote, error: updateError } = await db.quotes()
+      .update(updateData)
+      .eq('id', quoteId)
+      .select()
+      .single()
+
+    if (updateError) {
+      handleSupabaseError(updateError, 'regenerate acceptance link')
+      return
+    }
+
+    res.json({
+      success: true,
+      message: 'Acceptance link regenerated successfully',
+      data: {
+        acceptanceLink,
+        acceptanceToken
+      }
+    })
+
+  } catch (error) {
+    handleSupabaseError(error, 'regenerate acceptance link')
   }
 })
 

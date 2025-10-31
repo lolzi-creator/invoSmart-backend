@@ -30,6 +30,7 @@ export declare const config: {
             exempt: number;
         };
     };
+    frontendUrl: string;
 };
 export declare function validateConfig(): void;
 export default config;

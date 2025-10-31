@@ -1,51 +1,52 @@
 import { Router } from 'express'
+import { authenticateToken } from '../middleware/auth'
+import {
+  getUsers,
+  inviteUser,
+  updateUserRole,
+  deactivateUser,
+  reactivateUser
+} from '../controllers/userController'
 
 const router = Router()
 
-// Get all users
-router.get('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Users endpoint - coming soon',
-    data: []
-  })
-})
+// All routes require authentication
+router.use(authenticateToken)
 
-// Get user by ID
-router.get('/:id', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Get user by ID - coming soon',
-    data: null
-  })
-})
+/**
+ * @route   GET /api/v1/users
+ * @desc    Get all users in company
+ * @access  Private
+ */
+router.get('/', getUsers)
 
-// Create user
-router.post('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Create user - coming soon',
-    data: null
-  })
-})
+/**
+ * @route   POST /api/v1/users/invite
+ * @desc    Invite a new user to the company
+ * @access  Private (Admin only)
+ */
+router.post('/invite', inviteUser)
 
-// Update user
-router.put('/:id', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Update user - coming soon',
-    data: null
-  })
-})
+/**
+ * @route   PATCH /api/v1/users/:userId/role
+ * @desc    Update user role
+ * @access  Private (Admin only)
+ */
+router.patch('/:userId/role', updateUserRole)
 
-// Delete user
-router.delete('/:id', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Delete user - coming soon',
-    data: null
-  })
-})
+/**
+ * @route   PATCH /api/v1/users/:userId/deactivate
+ * @desc    Deactivate user
+ * @access  Private (Admin only)
+ */
+router.patch('/:userId/deactivate', deactivateUser)
+
+/**
+ * @route   PATCH /api/v1/users/:userId/reactivate
+ * @desc    Reactivate user
+ * @access  Private (Admin only)
+ */
+router.patch('/:userId/reactivate', reactivateUser)
 
 export default router
 

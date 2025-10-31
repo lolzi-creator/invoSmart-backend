@@ -17,6 +17,9 @@ import emailRoutes from './routes/emails'
 import expenseRoutes from './routes/expenses'
 import userRoutes from './routes/users'
 import auditRoutes from './routes/audit'
+import invitationRoutes from './routes/invitations'
+import permissionRoutes from './routes/permissions'
+import companyRoutes from './routes/company'
 // import customerRoutes from './routes/customers'
 // import invoiceRoutes from './routes/invoices'
 // import paymentRoutes from './routes/payments'
@@ -104,6 +107,9 @@ app.use('/api/v1/emails', emailRoutes)
 app.use('/api/v1/expenses', expenseRoutes)
 app.use('/api/v1/users', userRoutes)
 app.use('/api/v1/audit', auditRoutes)
+app.use('/api/v1/invitations', invitationRoutes)
+app.use('/api/v1/permissions', permissionRoutes)
+app.use('/api/v1/company', companyRoutes)
 console.log('✅ All API routes registered!')
 // app.use('/api/v1/customers', customerRoutes)
 // app.use('/api/v1/invoices', invoiceRoutes)
@@ -162,7 +168,7 @@ app.post('/api/v1/test-email', async (req, res) => {
     const resend = new Resend(process.env.RESEND_API_KEY)
     
     const result = await resend.emails.send({
-      from: 'invoSmart <onboarding@resend.dev>',
+      from: `${config.email.fromName} <${config.email.fromEmail}>`,
       to: ['mkrshkov@gmail.com'],
       subject: `Zahlungserinnerung - Rechnung ${invoiceData.number}`,
       html: `

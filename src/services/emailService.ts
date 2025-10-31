@@ -134,10 +134,16 @@ export class EmailService {
       return new Date(date).toLocaleDateString('de-CH')
     }
 
+    // Generate logo HTML if available
+    const logoHTML = company.logo_url
+      ? `<img src="${company.logo_url}" alt="${company.name}" style="max-width: 150px; max-height: 80px; object-fit: contain;" />`
+      : `<div style="color: #666; font-size: 14px;">${company.name}</div>`
+
     // Replace placeholders in template
     const replacements = {
       '{{CUSTOMER_NAME}}': customer.name || customer.company || 'Valued Customer',
       '{{COMPANY_NAME}}': company.name,
+      '{{COMPANY_LOGO}}': logoHTML,
       '{{INVOICE_NUMBER}}': invoice.number,
       '{{INVOICE_AMOUNT}}': formatAmount(invoice.total),
       '{{DUE_DATE}}': formatDate(invoice.due_date),
@@ -179,7 +185,9 @@ export class EmailService {
         <title>Friendly Reminder</title>
         <style>
           body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+          .header { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
+          .header-content { flex: 1; }
+          .header-logo { margin-left: 20px; text-align: right; }
           .content { background: white; padding: 20px; border: 1px solid #e9ecef; border-radius: 8px; }
           .invoice-details { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; }
           .amount { font-size: 24px; font-weight: bold; color: #dc3545; }
@@ -189,7 +197,12 @@ export class EmailService {
       </head>
       <body>
         <div class="header">
-          <h2>Friendly Reminder - Invoice Payment Due</h2>
+          <div class="header-content">
+            <h2 style="margin: 0;">Friendly Reminder - Invoice Payment Due</h2>
+          </div>
+          <div class="header-logo">
+            {{COMPANY_LOGO}}
+          </div>
         </div>
         
         <div class="content">
@@ -233,7 +246,9 @@ export class EmailService {
         <title>Second Reminder</title>
         <style>
           body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: #fff3cd; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #ffc107; }
+          .header { background: #fff3cd; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #ffc107; display: flex; align-items: center; justify-content: space-between; }
+          .header-content { flex: 1; }
+          .header-logo { margin-left: 20px; text-align: right; }
           .content { background: white; padding: 20px; border: 1px solid #e9ecef; border-radius: 8px; }
           .invoice-details { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; }
           .amount { font-size: 24px; font-weight: bold; color: #dc3545; }
@@ -243,7 +258,12 @@ export class EmailService {
       </head>
       <body>
         <div class="header">
-          <h2>Second Reminder - Invoice Payment Overdue</h2>
+          <div class="header-content">
+            <h2 style="margin: 0;">Second Reminder - Invoice Payment Overdue</h2>
+          </div>
+          <div class="header-logo">
+            {{COMPANY_LOGO}}
+          </div>
         </div>
         
         <div class="content">
@@ -289,7 +309,9 @@ export class EmailService {
         <title>Final Notice</title>
         <style>
           body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: #f8d7da; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #dc3545; }
+          .header { background: #f8d7da; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #dc3545; display: flex; align-items: center; justify-content: space-between; }
+          .header-content { flex: 1; }
+          .header-logo { margin-left: 20px; text-align: right; }
           .content { background: white; padding: 20px; border: 1px solid #e9ecef; border-radius: 8px; }
           .invoice-details { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; }
           .amount { font-size: 24px; font-weight: bold; color: #dc3545; }
@@ -300,7 +322,12 @@ export class EmailService {
       </head>
       <body>
         <div class="header">
-          <h2>Final Notice - Immediate Payment Required</h2>
+          <div class="header-content">
+            <h2 style="margin: 0;">Final Notice - Immediate Payment Required</h2>
+          </div>
+          <div class="header-logo">
+            {{COMPANY_LOGO}}
+          </div>
         </div>
         
         <div class="content">
@@ -350,7 +377,9 @@ export class EmailService {
         <title>New Invoice</title>
         <style>
           body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background: #d4edda; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #28a745; }
+          .header { background: #d4edda; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #28a745; display: flex; align-items: center; justify-content: space-between; }
+          .header-content { flex: 1; }
+          .header-logo { margin-left: 20px; text-align: right; }
           .content { background: white; padding: 20px; border: 1px solid #e9ecef; border-radius: 8px; }
           .invoice-details { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 15px 0; }
           .amount { font-size: 24px; font-weight: bold; color: #28a745; }
@@ -360,7 +389,12 @@ export class EmailService {
       </head>
       <body>
         <div class="header">
-          <h2>New Invoice - Payment Required</h2>
+          <div class="header-content">
+            <h2 style="margin: 0;">New Invoice - Payment Required</h2>
+          </div>
+          <div class="header-logo">
+            {{COMPANY_LOGO}}
+          </div>
         </div>
         
         <div class="content">
@@ -515,6 +549,9 @@ Email: {{COMPANY_EMAIL}}
 }
 
 export default EmailService
+
+
+
 
 
 

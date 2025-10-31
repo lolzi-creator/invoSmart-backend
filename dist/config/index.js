@@ -19,7 +19,7 @@ exports.config = {
     },
     email: {
         resendApiKey: process.env.RESEND_API_KEY || '',
-        fromEmail: 'onboarding@resend.dev',
+        fromEmail: process.env.FROM_EMAIL || 'onboarding@resend.dev',
         fromName: process.env.FROM_NAME || 'invoSmart'
     },
     rateLimit: {

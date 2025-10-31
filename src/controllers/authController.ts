@@ -243,6 +243,20 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
 
     const user = userData as DatabaseUser
 
+    // Initialize default permissions for the company
+    try {
+      const { error: permError } = await supabaseAdmin.rpc('initialize_company_permissions', {
+        company_uuid: company.id
+      })
+      if (permError) {
+        console.error('Error initializing permissions:', permError)
+        // Don't fail registration if permissions init fails
+      }
+    } catch (permError) {
+      console.error('Error initializing permissions:', permError)
+      // Continue with registration
+    }
+
     // Create default VAT rates and email templates
     try {
       await Promise.all([

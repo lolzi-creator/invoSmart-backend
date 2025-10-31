@@ -367,6 +367,45 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
       // Get company data
       const company = completeQuote.companies
       
+      // Fetch and convert logo to base64 if available
+      let logoBase64 = null
+      if (company?.logo_url) {
+        try {
+          console.log('🔍 Attempting to fetch logo for quote PDF. Logo URL:', company.logo_url)
+          
+          // Extract path from logo URL - handle different URL formats
+          let logoPath = null
+          if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+            logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0]
+          } else if (company.logo_url.includes('/logos/')) {
+            logoPath = company.logo_url.split('/logos/')[1].split('?')[0]
+          } else if (company.logo_url.startsWith('logos/')) {
+            logoPath = company.logo_url.replace('logos/', '').split('?')[0]
+          } else {
+            logoPath = company.logo_url.split('?')[0]
+          }
+          
+          console.log('📂 Extracted logo path for quote:', logoPath)
+          
+          if (logoPath) {
+            const { data: logoData, error: logoError } = await supabaseAdmin.storage
+              .from('logos')
+              .download(logoPath)
+            
+            if (logoError) {
+              console.error('❌ Error downloading logo for quote:', logoError)
+            } else if (logoData) {
+              const logoBuffer = Buffer.from(await logoData.arrayBuffer())
+              const logoMimeType = logoData.type || 'image/png'
+              logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`
+              console.log('✅ Logo converted to base64 for quote PDF')
+            }
+          }
+        } catch (logoFetchError) {
+          console.error('❌ Error fetching logo for quote PDF:', logoFetchError)
+        }
+      }
+      
       // Build quote PDF HTML template
       const quotePDFHTML = `
         <!DOCTYPE html>
@@ -390,7 +429,7 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
               border-bottom: 2px solid #e5e5e5;
             }
             .company-info { flex: 1; }
-            .logo { width: 150px; height: 80px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; }
+            .logo { width: 100px; height: 100px; background: transparent; display: flex; align-items: center; justify-content: center; padding: 5px; }
             .quote-title { 
               font-size: 24px; 
               font-weight: bold; 
@@ -451,7 +490,7 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
               ${company?.phone ? `<div>Tel: ${company.phone}</div>` : ''}
             </div>
             <div class="logo">
-              ${company?.logo_url ? `<img src="${company.logo_url}" alt="Logo" style="max-width: 100%; max-height: 100%;">` : '[LOGO]'}
+              ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 100px; max-height: 100px; width: 100px; height: 100px; object-fit: contain; display: block;">` : ''}
             </div>
           </div>
 
@@ -864,7 +903,7 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
     }
     
     const emailOptions: any = {
-      from: 'invoSmart <onboarding@resend.dev>',
+      from: `${config.email.fromName} <${config.email.fromEmail}>`,
       to: [verifiedEmail],
       subject: `Quote ${fullQuote.number} - ${fullQuote.customer?.name || 'Customer'}`,
       html: `
@@ -1065,6 +1104,45 @@ export const downloadQuotePDF = asyncHandler(async (req: AuthenticatedRequest, r
     const quote = createQuoteResponse(quoteData, quoteData.customers, quoteData.companies, quoteData.quote_items)
     const company = quoteData.companies
 
+    // Fetch and convert logo to base64 if available
+    let logoBase64 = null
+    if (company?.logo_url) {
+      try {
+        console.log('🔍 Attempting to fetch logo for quote download PDF. Logo URL:', company.logo_url)
+        
+        // Extract path from logo URL - handle different URL formats
+        let logoPath = null
+        if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+          logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0]
+        } else if (company.logo_url.includes('/logos/')) {
+          logoPath = company.logo_url.split('/logos/')[1].split('?')[0]
+        } else if (company.logo_url.startsWith('logos/')) {
+          logoPath = company.logo_url.replace('logos/', '').split('?')[0]
+        } else {
+          logoPath = company.logo_url.split('?')[0]
+        }
+        
+        console.log('📂 Extracted logo path for quote download:', logoPath)
+        
+        if (logoPath) {
+          const { data: logoData, error: logoError } = await supabaseAdmin.storage
+            .from('logos')
+            .download(logoPath)
+          
+          if (logoError) {
+            console.error('❌ Error downloading logo for quote download:', logoError)
+          } else if (logoData) {
+            const logoBuffer = Buffer.from(await logoData.arrayBuffer())
+            const logoMimeType = logoData.type || 'image/png'
+            logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`
+            console.log('✅ Logo converted to base64 for quote download PDF')
+          }
+        }
+      } catch (logoFetchError) {
+        console.error('❌ Error fetching logo for quote download PDF:', logoFetchError)
+      }
+    }
+
     // Generate Swiss QR code for acceptance link
     const QRCode = require('qrcode')
     const qrCodeImage = await QRCode.toDataURL(quote.acceptanceLink || '', {
@@ -1158,7 +1236,7 @@ export const downloadQuotePDF = asyncHandler(async (req: AuthenticatedRequest, r
             ${company?.phone ? `<div>Tel: ${company.phone}</div>` : ''}
           </div>
           <div class="logo">
-            ${company?.logo_url ? `<img src="${company.logo_url}" alt="Logo" style="max-width: 100%; max-height: 100%;">` : '[LOGO]'}
+            ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 220px; max-height: 150px; width: auto; height: auto; object-fit: contain; display: block;">` : ''}
           </div>
         </div>
 
@@ -1635,6 +1713,45 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
           .eq('id', quoteData.company_id)
           .single()
         
+        // Fetch and convert logo to base64 if available
+        let logoBase64 = null
+        if (company?.logo_url) {
+          try {
+            console.log('🔍 Attempting to fetch logo for accept quote PDFs. Logo URL:', company.logo_url)
+            
+            // Extract path from logo URL - handle different URL formats
+            let logoPath = null
+            if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+              logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0]
+            } else if (company.logo_url.includes('/logos/')) {
+              logoPath = company.logo_url.split('/logos/')[1].split('?')[0]
+            } else if (company.logo_url.startsWith('logos/')) {
+              logoPath = company.logo_url.replace('logos/', '').split('?')[0]
+            } else {
+              logoPath = company.logo_url.split('?')[0]
+            }
+            
+            console.log('📂 Extracted logo path for accept quote:', logoPath)
+            
+            if (logoPath) {
+              const { data: logoData, error: logoError } = await supabaseAdmin.storage
+                .from('logos')
+                .download(logoPath)
+              
+              if (logoError) {
+                console.error('❌ Error downloading logo for accept quote:', logoError)
+              } else if (logoData) {
+                const logoBuffer = Buffer.from(await logoData.arrayBuffer())
+                const logoMimeType = logoData.type || 'image/png'
+                logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`
+                console.log('✅ Logo converted to base64 for accept quote PDFs')
+              }
+            }
+          } catch (logoFetchError) {
+            console.error('❌ Error fetching logo for accept quote PDFs:', logoFetchError)
+          }
+        }
+        
         // Generate quote PDF on-the-fly for attachment
         const htmlPdfQuote = require('html-pdf-node')
         const QRCodeQuote = require('qrcode')
@@ -1708,7 +1825,7 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
                 border-bottom: 2px solid #e5e5e5;
               }
               .company-info { flex: 1; }
-              .logo { width: 150px; height: 80px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; }
+              .logo { width: 100px; height: 100px; background: transparent; display: flex; align-items: center; justify-content: center; padding: 5px; }
               .invoice-title { 
                 font-size: 24px; 
                 font-weight: bold; 
@@ -1770,7 +1887,7 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
                 ${company?.iban ? `<div>IBAN: ${company.iban}</div>` : ''}
               </div>
               <div class="logo">
-                ${company?.logo_url ? `<img src="${company.logo_url}" alt="Logo" style="max-width: 100%; max-height: 100%;">` : '[LOGO]'}
+                ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 100px; max-height: 100px; width: 100px; height: 100px; object-fit: contain; display: block;">` : ''}
               </div>
             </div>
 
@@ -1963,6 +2080,7 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
             body { font-family: Arial, sans-serif; margin: 0; padding: 20px; font-size: 12px; color: #333; }
             .header { display: flex; justify-content: space-between; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #e5e5e5; }
             .company-info { flex: 1; }
+            .logo { width: 100px; height: 100px; background: transparent; display: flex; align-items: center; justify-content: center; padding: 5px; }
             .quote-title { font-size: 24px; font-weight: bold; color: #f59e0b; margin: 20px 0; }
             .quote-details { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-bottom: 30px; }
             .items-table { width: 100%; border-collapse: collapse; margin: 30px 0; }
@@ -1982,6 +2100,9 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
                 <div>${company?.zip || ''} ${company?.city || 'City'}</div><div>Schweiz</div><br>
                 <div>E-Mail: ${company?.email || 'email@company.com'}</div>
                 ${company?.phone ? `<div>Tel: ${company.phone}</div>` : ''}
+              </div>
+              <div class="logo">
+                ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 100px; max-height: 100px; width: 100px; height: 100px; object-fit: contain; display: block;">` : ''}
               </div>
             </div>
             <div class="quote-title">Quote ${quote.number}</div>
@@ -2031,7 +2152,7 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
         
         // Send professional email with both PDF attachments
         const emailResult = await resend.emails.send({
-          from: `${company?.name || 'invoSmart'} <onboarding@resend.dev>`,
+          from: `${company?.name || config.email.fromName} <${config.email.fromEmail}>`,
           to: [customerEmailToUse],
           subject: `Invoice ${completeInvoice.number} - Payment Request`,
           html: `

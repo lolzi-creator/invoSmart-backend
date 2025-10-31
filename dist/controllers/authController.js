@@ -204,6 +204,17 @@ exports.register = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         }
         const user = userData;
         try {
+            const { error: permError } = await supabase_1.supabaseAdmin.rpc('initialize_company_permissions', {
+                company_uuid: company.id
+            });
+            if (permError) {
+                console.error('Error initializing permissions:', permError);
+            }
+        }
+        catch (permError) {
+            console.error('Error initializing permissions:', permError);
+        }
+        try {
             await Promise.all([
                 supabase_1.supabaseAdmin.rpc('create_default_vat_rates', { company_uuid: company.id }),
                 supabase_1.supabaseAdmin.rpc('create_default_email_templates', { company_uuid: company.id })

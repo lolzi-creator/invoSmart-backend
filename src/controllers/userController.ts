@@ -2,6 +2,7 @@ import { Request, Response } from 'express'
 import { supabaseAdmin } from '../lib/supabase'
 import { AuthenticatedRequest } from '../types'
 import { createAuditLog } from './auditController'
+import { config } from '../config'
 import bcrypt from 'bcryptjs'
 
 // Get all users in the company
@@ -30,67 +31,179 @@ export const getUsers = async (req: AuthenticatedRequest, res: Response) => {
 // Invite a new user
 export const inviteUser = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { companyId } = req.user!
+    const { companyId, role: inviterRole } = req.user!
+    
+    // Only admins can invite users
+    if (inviterRole !== 'ADMIN') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Only admins can invite users' 
+      })
+    }
+
     const { email, name, role = 'EMPLOYEE' } = req.body
 
     if (!email || !name) {
       return res.status(400).json({ success: false, message: 'Email and name are required' })
     }
 
+    // Validate role
+    if (!['ADMIN', 'EMPLOYEE'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Invalid role' })
+    }
+
     // Check if user already exists
     const { data: existingUser } = await supabaseAdmin
       .from('users')
       .select('id')
-      .eq('email', email)
+      .eq('email', email.toLowerCase())
       .single()
 
     if (existingUser) {
-      return res.status(400).json({ success: false, message: 'User already exists' })
+      return res.status(400).json({ success: false, message: 'User with this email already exists' })
     }
 
-    // Generate a temporary password for the invited user
-    const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8)
-    const hashedPassword = await bcrypt.hash(tempPassword, 12)
-
-    // Create new user
-    const { data: newUser, error } = await supabaseAdmin
-      .from('users')
-      .insert({
-        email,
-        name,
-        role,
-        password_hash: hashedPassword,
-        company_id: companyId,
-        is_active: true,
-        created_at: new Date().toISOString()
-      })
-      .select('id, name, email, role, created_at')
+    // Check for existing pending invitation
+    const { data: existingInvitation } = await supabaseAdmin
+      .from('user_invitations')
+      .select('id, expires_at')
+      .eq('company_id', companyId)
+      .eq('email', email.toLowerCase())
+      .is('accepted_at', null)
+      .gt('expires_at', new Date().toISOString())
       .single()
 
-    if (error) {
-      console.error('Error creating user:', error)
-      return res.status(500).json({ success: false, message: 'Failed to create user' })
+    if (existingInvitation) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'An invitation has already been sent to this email address' 
+      })
+    }
+
+    // Generate secure invitation token
+    const token = Buffer.from(`${companyId}-${email}-${Date.now()}-${Math.random()}`)
+      .toString('base64')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .substring(0, 64)
+
+    // Token expires in 7 days
+    const expiresAt = new Date()
+    expiresAt.setDate(expiresAt.getDate() + 7)
+
+    // Create invitation
+    const { data: invitation, error: inviteError } = await supabaseAdmin
+      .from('user_invitations')
+      .insert({
+        company_id: companyId,
+        invited_by: req.user!.id,
+        email: email.toLowerCase(),
+        name,
+        role,
+        token,
+        expires_at: expiresAt.toISOString()
+      })
+      .select()
+      .single()
+
+    if (inviteError) {
+      console.error('Error creating invitation:', inviteError)
+      return res.status(500).json({ success: false, message: 'Failed to create invitation' })
+    }
+
+    // Get company data for email
+    const { data: company } = await supabaseAdmin
+      .from('companies')
+      .select('name')
+      .eq('id', companyId)
+      .single()
+
+    // Send invitation email
+    try {
+      const { Resend } = require('resend')
+      const resend = new Resend(process.env.RESEND_API_KEY)
+      const { config } = require('../config')
+
+      const frontendUrl = process.env.FRONTEND_URL || config.frontendUrl || 'http://localhost:5173'
+      const invitationLink = `${frontendUrl}/invitations/accept/${token}`
+
+      await resend.emails.send({
+        from: `${config.email.fromName} <${config.email.fromEmail}>`,
+        to: [email.toLowerCase()],
+        subject: `Invitation to join ${company?.name || 'invoSmart'}`,
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+              .header { background-color: #f59e0b; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+              .content { background-color: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
+              .button { display: inline-block; padding: 12px 24px; background-color: #f59e0b; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+              .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>You've been invited!</h1>
+              </div>
+              <div class="content">
+                <p>Hello ${name},</p>
+                <p>You have been invited to join <strong>${company?.name || 'the company'}</strong> on invoSmart.</p>
+                <p>You will be added as a <strong>${role}</strong>.</p>
+                <p>Click the button below to accept the invitation and set up your account:</p>
+                <div style="text-align: center;">
+                  <a href="${invitationLink}" class="button">Accept Invitation</a>
+                </div>
+                <p>Or copy and paste this link into your browser:</p>
+                <p style="word-break: break-all; color: #666; font-size: 12px;">${invitationLink}</p>
+                <p><strong>This invitation will expire in 7 days.</strong></p>
+                <p>If you didn't expect this invitation, you can safely ignore this email.</p>
+              </div>
+              <div class="footer">
+                <p>© ${new Date().getFullYear()} invoSmart. All rights reserved.</p>
+              </div>
+            </div>
+          </body>
+          </html>
+        `,
+        text: `Hello ${name},\n\nYou have been invited to join ${company?.name || 'the company'} on invoSmart as a ${role}.\n\nAccept your invitation by clicking this link: ${invitationLink}\n\nThis invitation will expire in 7 days.\n\nIf you didn't expect this invitation, you can safely ignore this email.`
+      })
+
+      console.log(`✅ Invitation email sent to ${email}`)
+    } catch (emailError) {
+      console.error('Error sending invitation email:', emailError)
+      // Don't fail the request if email fails - invitation is still created
     }
 
     // Log audit event
-    await createAuditLog(
-      req.user!.id,
-      req.user!.name,
-      'USER_INVITED',
-      'USER',
-      newUser.id,
-      { email, name, role },
-      req.ip,
-      req.get('User-Agent')
-    )
+    try {
+      await createAuditLog(
+        req.user!.id,
+        req.user!.name,
+        'USER_INVITED',
+        'USER_INVITATION',
+        invitation.id,
+        { email: email.toLowerCase(), name, role },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+      // Continue even if audit log fails
+    }
 
     return res.json({ 
       success: true, 
-      data: { 
-        ...newUser, 
-        tempPassword // Include temp password for admin to share
-      }, 
-      message: 'User invited successfully. Please share the temporary password with the user.' 
+      message: 'Invitation sent successfully',
+      data: {
+        invitationId: invitation.id,
+        email: invitation.email,
+        role: invitation.role,
+        expiresAt: invitation.expires_at
+      }
     })
   } catch (error) {
     console.error('Error in inviteUser:', error)
@@ -228,5 +341,7 @@ export const reactivateUser = async (req: AuthenticatedRequest, res: Response) =
     return res.status(500).json({ success: false, message: 'Internal server error' })
   }
 }
+
+
 
 

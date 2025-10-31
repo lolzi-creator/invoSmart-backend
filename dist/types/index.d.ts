@@ -109,6 +109,47 @@ export interface InvoiceFile {
     mimeType: string;
     uploadedAt: Date;
 }
+export interface Quote {
+    id: string;
+    number: string;
+    customerId: string;
+    customer?: Customer;
+    companyId: string;
+    company?: Company;
+    date: Date;
+    expiryDate: Date;
+    status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CANCELLED' | 'CONVERTED';
+    subtotal: number;
+    vatAmount: number;
+    total: number;
+    discountCode?: string;
+    discountAmount: number;
+    internalNotes?: string;
+    acceptanceToken?: string;
+    acceptanceLink?: string;
+    acceptedAt?: Date;
+    acceptedByEmail?: string;
+    sentAt?: Date;
+    emailSentCount: number;
+    convertedToInvoiceId?: string;
+    convertedAt?: Date;
+    items: QuoteItem[];
+    createdAt: Date;
+    updatedAt: Date;
+}
+export interface QuoteItem {
+    id: string;
+    quoteId: string;
+    description: string;
+    quantity: number;
+    unit: string;
+    unitPrice: number;
+    discount: number;
+    vatRate: number;
+    lineTotal: number;
+    vatAmount: number;
+    sortOrder: number;
+}
 export interface Payment {
     id: string;
     invoiceId?: string;

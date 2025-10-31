@@ -119,13 +119,30 @@ const findMatchingInvoice = async (
     criteria: ms.criteria
   })))
 
-  // Only auto-match if we have a high confidence match (2/3 or more criteria match)
+  // Only auto-match if we have a high confidence match
+  // Special case: Exact QR reference match should always auto-match (HIGH confidence)
   const bestMatch = matchScores[0]
-  if (bestMatch && bestMatch.confidence !== MatchConfidence.MANUAL) {
-    console.log('Auto-matching payment to invoice:', bestMatch.invoice.number)
-    return { 
-      invoice: bestMatch.invoice, 
-      confidence: bestMatch.confidence 
+  if (bestMatch) {
+    // If QR reference matches exactly, it's a HIGH confidence match regardless of other criteria
+    if (bestMatch.criteria.reference && payment.reference && bestMatch.invoice.qr_reference) {
+      const cleanPaymentRef = payment.reference.replace(/\s/g, '')
+      const cleanInvoiceRef = bestMatch.invoice.qr_reference.replace(/\s/g, '')
+      if (cleanPaymentRef === cleanInvoiceRef) {
+        console.log('Auto-matching payment to invoice by exact QR reference:', bestMatch.invoice.number)
+        return { 
+          invoice: bestMatch.invoice, 
+          confidence: MatchConfidence.HIGH 
+        }
+      }
+    }
+    
+    // Otherwise, use normal confidence logic (HIGH or MEDIUM)
+    if (bestMatch.confidence !== MatchConfidence.MANUAL && bestMatch.confidence !== MatchConfidence.LOW) {
+      console.log('Auto-matching payment to invoice:', bestMatch.invoice.number)
+      return { 
+        invoice: bestMatch.invoice, 
+        confidence: bestMatch.confidence 
+      }
     }
   }
 
@@ -460,6 +477,39 @@ export const getPayment = asyncHandler(async (req: AuthenticatedRequest, res: Re
     }
 
     const payment = createPaymentResponse(data as DatabasePayment)
+
+    // If payment is matched to an invoice, fetch the invoice data
+    if (payment.invoiceId) {
+      const { data: invoiceData, error: invoiceError } = await db.invoices()
+        .select(`
+          *,
+          customers (
+            id, name, company, email
+          )
+        `)
+        .eq('id', payment.invoiceId)
+        .eq('company_id', companyId)
+        .single()
+
+      if (!invoiceError && invoiceData) {
+        // Add invoice data to payment response
+        ;(payment as any).invoice = {
+          id: invoiceData.id,
+          number: invoiceData.number,
+          total: invoiceData.total / 100, // Convert Rappen to CHF
+          date: invoiceData.date,
+          dueDate: invoiceData.due_date,
+          status: invoiceData.status,
+          qrReference: invoiceData.qr_reference,
+          customer: invoiceData.customers ? {
+            id: invoiceData.customers.id,
+            name: invoiceData.customers.name,
+            company: invoiceData.customers.company,
+            email: invoiceData.customers.email
+          } : undefined
+        }
+      }
+    }
 
     res.json({
       success: true,

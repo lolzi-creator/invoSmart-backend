@@ -118,6 +118,49 @@ export interface InvoiceFile {
   uploadedAt: Date
 }
 
+export interface Quote {
+  id: string
+  number: string
+  customerId: string
+  customer?: Customer
+  companyId: string
+  company?: Company
+  date: Date
+  expiryDate: Date
+  status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CANCELLED' | 'CONVERTED'
+  subtotal: number // in Rappen
+  vatAmount: number // in Rappen
+  total: number // in Rappen
+  discountCode?: string
+  discountAmount: number // in Rappen
+  internalNotes?: string
+  acceptanceToken?: string
+  acceptanceLink?: string
+  acceptedAt?: Date
+  acceptedByEmail?: string
+  sentAt?: Date
+  emailSentCount: number
+  convertedToInvoiceId?: string
+  convertedAt?: Date
+  items: QuoteItem[]
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface QuoteItem {
+  id: string
+  quoteId: string
+  description: string
+  quantity: number // * 1000 for 3 decimals
+  unit: string
+  unitPrice: number // in Rappen
+  discount: number // percentage * 100
+  vatRate: number // percentage * 100
+  lineTotal: number // in Rappen
+  vatAmount: number // in Rappen
+  sortOrder: number
+}
+
 export interface Payment {
   id: string
   invoiceId?: string

@@ -292,24 +292,36 @@ CREATE TRIGGER update_discount_codes_updated_at BEFORE UPDATE ON discount_codes 
 CREATE TRIGGER update_email_templates_updated_at BEFORE UPDATE ON email_templates FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Function to generate invoice number
+-- Format: RE-{UUID_PART}-{YEAR}-{7_DIGIT_SEQUENTIAL}
+-- Example: RE-fd71-2025-0000001
 CREATE OR REPLACE FUNCTION generate_invoice_number(company_uuid UUID)
 RETURNS VARCHAR(50) AS $$
 DECLARE
   current_year INTEGER;
   next_number INTEGER;
   invoice_number VARCHAR(50);
+  uuid_part VARCHAR(10);
 BEGIN
   current_year := EXTRACT(YEAR FROM CURRENT_DATE);
   
+  -- Extract middle segment from UUID (e.g., "fd71" from "ba6d7934-fd71-426a-8344-57613a17477c")
+  -- Using 2nd segment (split by dash and take 2nd part)
+  uuid_part := UPPER(SPLIT_PART(company_uuid::TEXT, '-', 2));
+  
+  -- Get next sequential number for this company and year
+  -- Match pattern: RE-{uuid_part}-{year}-{sequential} (7 digits)
+  -- Escape special characters in uuid_part for regex
   SELECT COALESCE(MAX(
-    CAST(SUBSTRING(number FROM 'RE-\d{4}-(\d+)') AS INTEGER)
+    CAST(SUBSTRING(number FROM 'RE-' || uuid_part || '-' || current_year::TEXT || '-(\d{7})') AS INTEGER)
   ), 0) + 1
   INTO next_number
   FROM invoices 
   WHERE company_id = company_uuid 
-    AND EXTRACT(YEAR FROM date) = current_year;
+    AND EXTRACT(YEAR FROM date) = current_year
+    AND number LIKE 'RE-' || uuid_part || '-' || current_year::TEXT || '-%';
   
-  invoice_number := 'RE-' || current_year || '-' || LPAD(next_number::TEXT, 4, '0');
+  -- Format: RE-{UUID_PART}-{YEAR}-{7_DIGIT_SEQUENTIAL}
+  invoice_number := 'RE-' || uuid_part || '-' || current_year || '-' || LPAD(next_number::TEXT, 7, '0');
   
   RETURN invoice_number;
 END;

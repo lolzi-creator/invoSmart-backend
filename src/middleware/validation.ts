@@ -169,6 +169,30 @@ export const schemas = {
     status: Joi.string().valid('DRAFT', 'OPEN', 'PARTIAL_PAID', 'PAID', 'OVERDUE', 'CANCELLED').required()
   }),
 
+  // Quote schemas
+  createQuote: Joi.object({
+    customerId: Joi.string().required(),
+    date: Joi.date().optional(),
+    expiryDate: Joi.date().required(),
+    discountCode: Joi.string().optional(),
+    discountAmount: Joi.number().min(0).default(0),
+    internalNotes: Joi.string().allow('').optional(),
+    items: Joi.array().items(
+      Joi.object({
+        description: Joi.string().min(1).max(500).required(),
+        quantity: Joi.number().positive().required(),
+        unit: Joi.string().max(20).default('Stück'),
+        unitPrice: Joi.number().min(0).required(),
+        discount: Joi.number().min(0).max(100).default(0),
+        vatRate: Joi.number().min(0).max(100).required()
+      })
+    ).min(1).required()
+  }),
+
+  updateQuoteStatus: Joi.object({
+    status: Joi.string().valid('DRAFT', 'SENT', 'ACCEPTED', 'DECLINED', 'EXPIRED', 'CANCELLED', 'CONVERTED').required()
+  }),
+
   // Payment schemas
   createPayment: Joi.object({
     invoiceId: Joi.string().optional(),

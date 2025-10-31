@@ -78,12 +78,25 @@ const findMatchingInvoice = async (payment, companyId) => {
         criteria: ms.criteria
     })));
     const bestMatch = matchScores[0];
-    if (bestMatch && bestMatch.confidence !== types_1.MatchConfidence.MANUAL) {
-        console.log('Auto-matching payment to invoice:', bestMatch.invoice.number);
-        return {
-            invoice: bestMatch.invoice,
-            confidence: bestMatch.confidence
-        };
+    if (bestMatch) {
+        if (bestMatch.criteria.reference && payment.reference && bestMatch.invoice.qr_reference) {
+            const cleanPaymentRef = payment.reference.replace(/\s/g, '');
+            const cleanInvoiceRef = bestMatch.invoice.qr_reference.replace(/\s/g, '');
+            if (cleanPaymentRef === cleanInvoiceRef) {
+                console.log('Auto-matching payment to invoice by exact QR reference:', bestMatch.invoice.number);
+                return {
+                    invoice: bestMatch.invoice,
+                    confidence: types_1.MatchConfidence.HIGH
+                };
+            }
+        }
+        if (bestMatch.confidence !== types_1.MatchConfidence.MANUAL && bestMatch.confidence !== types_1.MatchConfidence.LOW) {
+            console.log('Auto-matching payment to invoice:', bestMatch.invoice.number);
+            return {
+                invoice: bestMatch.invoice,
+                confidence: bestMatch.confidence
+            };
+        }
     }
     return { confidence: types_1.MatchConfidence.MANUAL };
 };
@@ -345,6 +358,36 @@ exports.getPayment = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             return;
         }
         const payment = createPaymentResponse(data);
+        if (payment.invoiceId) {
+            const { data: invoiceData, error: invoiceError } = await supabase_1.db.invoices()
+                .select(`
+          *,
+          customers (
+            id, name, company, email
+          )
+        `)
+                .eq('id', payment.invoiceId)
+                .eq('company_id', companyId)
+                .single();
+            if (!invoiceError && invoiceData) {
+                ;
+                payment.invoice = {
+                    id: invoiceData.id,
+                    number: invoiceData.number,
+                    total: invoiceData.total / 100,
+                    date: invoiceData.date,
+                    dueDate: invoiceData.due_date,
+                    status: invoiceData.status,
+                    qrReference: invoiceData.qr_reference,
+                    customer: invoiceData.customers ? {
+                        id: invoiceData.customers.id,
+                        name: invoiceData.customers.name,
+                        company: invoiceData.customers.company,
+                        email: invoiceData.customers.email
+                    } : undefined
+                };
+            }
+        }
         res.json({
             success: true,
             data: { payment }

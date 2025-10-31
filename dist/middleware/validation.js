@@ -137,6 +137,25 @@ exports.schemas = {
     updateInvoiceStatus: joi_1.default.object({
         status: joi_1.default.string().valid('DRAFT', 'OPEN', 'PARTIAL_PAID', 'PAID', 'OVERDUE', 'CANCELLED').required()
     }),
+    createQuote: joi_1.default.object({
+        customerId: joi_1.default.string().required(),
+        date: joi_1.default.date().optional(),
+        expiryDate: joi_1.default.date().required(),
+        discountCode: joi_1.default.string().optional(),
+        discountAmount: joi_1.default.number().min(0).default(0),
+        internalNotes: joi_1.default.string().allow('').optional(),
+        items: joi_1.default.array().items(joi_1.default.object({
+            description: joi_1.default.string().min(1).max(500).required(),
+            quantity: joi_1.default.number().positive().required(),
+            unit: joi_1.default.string().max(20).default('Stück'),
+            unitPrice: joi_1.default.number().min(0).required(),
+            discount: joi_1.default.number().min(0).max(100).default(0),
+            vatRate: joi_1.default.number().min(0).max(100).required()
+        })).min(1).required()
+    }),
+    updateQuoteStatus: joi_1.default.object({
+        status: joi_1.default.string().valid('DRAFT', 'SENT', 'ACCEPTED', 'DECLINED', 'EXPIRED', 'CANCELLED', 'CONVERTED').required()
+    }),
     createPayment: joi_1.default.object({
         invoiceId: joi_1.default.string().optional(),
         amount: joi_1.default.number().positive().required(),

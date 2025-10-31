@@ -10,7 +10,8 @@ import {
   uploadExpenseFiles,
   deleteExpenseFile,
   getExpenseCategories,
-  getExpenseStats
+  getExpenseStats,
+  exportExpenses
 } from '../controllers/expenseController'
 
 const router = express.Router()
@@ -53,8 +54,7 @@ router.post('/:id/files', upload.array('files', 10), uploadExpenseFiles)
 // Delete file from expense
 router.delete('/:id/files/:fileId', deleteExpenseFile)
 
+// Export expenses (PDF + Excel + ZIP)
+router.post('/export', exportExpenses)
+
 export default router
-
-
-
-

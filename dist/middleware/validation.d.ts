@@ -16,6 +16,8 @@ export declare const schemas: {
     createInvoice: Joi.ObjectSchema<any>;
     updateInvoice: Joi.ObjectSchema<any>;
     updateInvoiceStatus: Joi.ObjectSchema<any>;
+    createQuote: Joi.ObjectSchema<any>;
+    updateQuoteStatus: Joi.ObjectSchema<any>;
     createPayment: Joi.ObjectSchema<any>;
     matchPayment: Joi.ObjectSchema<any>;
     importPayments: Joi.ObjectSchema<any>;

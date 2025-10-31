@@ -40,6 +40,10 @@ export const db = {
   invoices: () => supabaseAdmin.from('invoices'),
   invoiceItems: () => supabaseAdmin.from('invoice_items'),
   
+  // Quotes
+  quotes: () => supabaseAdmin.from('quotes'),
+  quoteItems: () => supabaseAdmin.from('quote_items'),
+  
   // Payments
   payments: () => supabaseAdmin.from('payments'),
   
@@ -262,5 +266,46 @@ export interface DatabaseExpense {
   attachments?: ExpenseAttachment[]
   created_at: string
   updated_at: string
+}
+
+export interface DatabaseQuote {
+  id: string
+  number: string
+  customer_id: string
+  company_id: string
+  date: string
+  expiry_date: string
+  status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'DECLINED' | 'EXPIRED' | 'CANCELLED' | 'CONVERTED'
+  subtotal: number
+  vat_amount: number
+  total: number
+  discount_code?: string
+  discount_amount: number
+  internal_notes?: string
+  acceptance_token?: string
+  acceptance_link?: string
+  accepted_at?: string
+  accepted_by_email?: string
+  sent_at?: string
+  email_sent_count: number
+  converted_to_invoice_id?: string
+  converted_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface DatabaseQuoteItem {
+  id: string
+  quote_id: string
+  description: string
+  quantity: number
+  unit: string
+  unit_price: number
+  discount: number
+  vat_rate: number
+  line_total: number
+  vat_amount: number
+  sort_order: number
+  created_at: string
 }
 

@@ -2,12 +2,40 @@ import { Response } from 'express'
 import { supabaseAdmin, db, handleSupabaseError, DatabaseExpense, ExpenseAttachment } from '../lib/supabase'
 import { AuthenticatedRequest } from '../types'
 
-// Helper function to generate file path
-const generateFilePath = (companyId: string, filename: string): string => {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  return `${companyId}/${year}/${month}/${filename}`
+// Helper function to sanitize names for file paths
+const sanitizeForPath = (name: string): string => {
+  return name.replace(/[^a-zA-Z0-9-_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
+}
+
+// Helper function to generate file path (Option 3 structure)
+// Format: CompanyName/Year/Month/Category/ExpenseID/filename
+const generateFilePath = async (
+  companyId: string, 
+  expenseId: string, 
+  category: string, 
+  expenseDate: string,
+  filename: string
+): Promise<string> => {
+  // Get company name
+  const { data: company, error } = await db.companies()
+    .select('name')
+    .eq('id', companyId)
+    .single()
+  
+  const companyName = company?.name || 'Company'
+  const sanitizedCompanyName = sanitizeForPath(companyName)
+  
+  // Parse expense date to get year and month
+  const date = new Date(expenseDate)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                      'July', 'August', 'September', 'October', 'November', 'December']
+  const monthName = monthNames[date.getMonth()]
+  
+  const sanitizedCategory = sanitizeForPath(category)
+  
+  return `${sanitizedCompanyName}/${year}/${month}-${monthName}/${sanitizedCategory}/${expenseId}/${filename}`
 }
 
 // Helper function to generate unique filename
@@ -224,7 +252,12 @@ export const createExpense = async (req: AuthenticatedRequest, res: Response) =>
       expense_date,
       payment_date,
       vat_rate = 7.7,
-      is_tax_deductible = true
+      is_tax_deductible = true,
+      vendor_name,
+      is_recurring = false,
+      recurring_period,
+      budget_category,
+      notes
     } = req.body
 
     if (!title || !amount || !category || !expense_date) {
@@ -236,7 +269,7 @@ export const createExpense = async (req: AuthenticatedRequest, res: Response) =>
     // Calculate VAT amount
     const vatAmount = Math.round(amount * (vat_rate / 100))
 
-    const expenseData = {
+    const expenseData: any = {
       company_id: companyId,
       user_id: userId,
       title,
@@ -244,15 +277,22 @@ export const createExpense = async (req: AuthenticatedRequest, res: Response) =>
       amount: Math.round(amount), // Convert to Rappen
       currency,
       category,
-      subcategory,
-      payment_method,
+      subcategory: subcategory || null,
+      payment_method: payment_method || null,
       expense_date,
-      payment_date,
+      payment_date: payment_date || null,
       vat_rate,
       vat_amount: vatAmount,
       is_tax_deductible,
       attachments: []
     }
+    
+    // Add optional fields for Option 3
+    if (vendor_name) expenseData.vendor_name = vendor_name
+    if (is_recurring !== undefined) expenseData.is_recurring = is_recurring
+    if (recurring_period) expenseData.recurring_period = recurring_period
+    if (budget_category) expenseData.budget_category = budget_category
+    if (notes) expenseData.notes = notes
 
     const { data: expense, error } = await db.expenses()
       .insert(expenseData)
@@ -300,7 +340,12 @@ export const updateExpense = async (req: AuthenticatedRequest, res: Response) =>
       payment_date,
       status,
       vat_rate,
-      is_tax_deductible
+      is_tax_deductible,
+      vendor_name,
+      is_recurring,
+      recurring_period,
+      budget_category,
+      notes
     } = req.body
 
     const updateData: any = {}
@@ -330,6 +375,11 @@ export const updateExpense = async (req: AuthenticatedRequest, res: Response) =>
       }
     }
     if (is_tax_deductible !== undefined) updateData.is_tax_deductible = is_tax_deductible
+    if (vendor_name !== undefined) updateData.vendor_name = vendor_name
+    if (is_recurring !== undefined) updateData.is_recurring = is_recurring
+    if (recurring_period !== undefined) updateData.recurring_period = recurring_period
+    if (budget_category !== undefined) updateData.budget_category = budget_category
+    if (notes !== undefined) updateData.notes = notes
 
     updateData.updated_at = new Date().toISOString()
 
@@ -436,7 +486,7 @@ export const uploadExpenseFiles = async (req: AuthenticatedRequest, res: Respons
 
     // Check if expense exists and belongs to company
     const { data: expense, error: fetchError } = await db.expenses()
-      .select('id, attachments')
+      .select('id, attachments, category, expense_date')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
@@ -457,7 +507,13 @@ export const uploadExpenseFiles = async (req: AuthenticatedRequest, res: Respons
     for (const file of req.files) {
       try {
         const uniqueFilename = generateUniqueFilename(file.originalname)
-        const filePath = generateFilePath(companyId, uniqueFilename)
+        const filePath = await generateFilePath(
+          companyId, 
+          id, 
+          expense?.category || 'Uncategorized',
+          expense?.expense_date || new Date().toISOString().split('T')[0],
+          uniqueFilename
+        )
 
         // Upload to Supabase Storage
         const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
@@ -708,6 +764,317 @@ export const getExpenseStats = async (req: AuthenticatedRequest, res: Response) 
       error: 'Internal server error',
       details: error instanceof Error ? error.message : 'Unknown error'
     })
+  }
+}
+
+// Export expenses (PDF + Excel + ZIP)
+export const exportExpenses = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const companyId = req.user?.companyId
+    const { startDate, endDate, format } = req.body
+
+    if (!companyId) {
+      res.status(401).json({ error: 'Company ID required' })
+      return
+    }
+
+    if (!startDate || !endDate) {
+      res.status(400).json({ error: 'Start date and end date are required' })
+      return
+    }
+
+    // Fetch all expenses in the date range
+    const { data: expenses, error: expensesError } = await db.expenses()
+      .select('*')
+      .eq('company_id', companyId)
+      .gte('expense_date', startDate)
+      .lte('expense_date', endDate)
+      .order('expense_date', { ascending: false })
+
+    if (expensesError) {
+      handleSupabaseError(expensesError, 'fetch expenses for export')
+      return
+    }
+
+    if (!expenses || expenses.length === 0) {
+      res.status(404).json({ error: 'No expenses found for the selected date range' })
+      return
+    }
+
+    // Get company data
+    const { data: company, error: companyError } = await db.companies()
+      .select('*')
+      .eq('id', companyId)
+      .single()
+
+    if (companyError || !company) {
+      res.status(404).json({ error: 'Company not found' })
+      return
+    }
+
+    const ExcelJS = require('exceljs')
+    const archiver = require('archiver')
+    const htmlPdf = require('html-pdf-node')
+
+    // Calculate totals
+    const totalAmount = expenses.reduce((sum, exp) => sum + (exp.amount || 0), 0) / 100
+    const totalVAT = expenses.reduce((sum, exp) => sum + (exp.vat_amount || 0), 0) / 100
+    const totalCount = expenses.length
+
+    // Group by category
+    const categoryStats: Record<string, { count: number; amount: number }> = {}
+    expenses.forEach(exp => {
+      const category = exp.category || 'Uncategorized'
+      if (!categoryStats[category]) {
+        categoryStats[category] = { count: 0, amount: 0 }
+      }
+      categoryStats[category].count++
+      categoryStats[category].amount += (exp.amount || 0) / 100
+    })
+
+    const formatDate = (dateStr: string) => {
+      return new Date(dateStr).toLocaleDateString('de-CH')
+    }
+
+    // Generate PDF summary
+    const pdfHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Expense Report - ${formatDate(startDate)} to ${formatDate(endDate)}</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; font-size: 12px; }
+          h1 { color: #f59e0b; margin-bottom: 10px; }
+          h2 { color: #333; margin-top: 30px; margin-bottom: 10px; }
+          table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+          th { background-color: #f8f9fa; font-weight: bold; }
+          .summary { background-color: #f0f9ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
+          .total { font-weight: bold; font-size: 14px; }
+          .right { text-align: right; }
+        </style>
+      </head>
+      <body>
+        <h1>Expense Report</h1>
+        <div>
+          <p><strong>Company:</strong> ${company.name}</p>
+          <p><strong>Period:</strong> ${formatDate(startDate)} - ${formatDate(endDate)}</p>
+        </div>
+        
+        <div class="summary">
+          <h2>Summary</h2>
+          <p>Total Expenses: <strong>CHF ${totalAmount.toFixed(2)}</strong></p>
+          <p>Total VAT: <strong>CHF ${totalVAT.toFixed(2)}</strong></p>
+          <p>Total Count: <strong>${totalCount}</strong> expenses</p>
+        </div>
+
+        <h2>By Category</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th class="right">Count</th>
+              <th class="right">Total Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${Object.entries(categoryStats).map(([cat, stats]) => `
+              <tr>
+                <td>${cat}</td>
+                <td class="right">${stats.count}</td>
+                <td class="right">CHF ${stats.amount.toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        <h2>Detailed List</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Title</th>
+              <th>Category</th>
+              <th>Vendor</th>
+              <th class="right">Amount</th>
+              <th class="right">VAT</th>
+              <th class="right">Total</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${expenses.map(exp => `
+              <tr>
+                <td>${formatDate(exp.expense_date)}</td>
+                <td>${exp.title || ''}</td>
+                <td>${exp.category || ''}</td>
+                <td>${exp.vendor_name || '-'}</td>
+                <td class="right">CHF ${((exp.amount || 0) / 100).toFixed(2)}</td>
+                <td class="right">CHF ${((exp.vat_amount || 0) / 100).toFixed(2)}</td>
+                <td class="right">CHF ${(((exp.amount || 0) + (exp.vat_amount || 0)) / 100).toFixed(2)}</td>
+                <td>${exp.status || 'PENDING'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </body>
+      </html>
+    `
+
+    // Generate PDF buffer
+    const pdfOptions = {
+      format: 'A4',
+      margin: { top: '20mm', bottom: '20mm', left: '20mm', right: '20mm' },
+      printBackground: true,
+      timeout: 30000
+    }
+    const pdfBuffer = await htmlPdf.generatePdf({ content: pdfHtml }, pdfOptions)
+
+    // Generate Excel workbook
+    const workbook = new ExcelJS.Workbook()
+    const worksheet = workbook.addWorksheet('Expenses')
+
+    // Add summary sheet
+    const summarySheet = workbook.addWorksheet('Summary')
+    summarySheet.columns = [
+      { header: 'Metric', key: 'metric', width: 30 },
+      { header: 'Value', key: 'value', width: 20 }
+    ]
+    summarySheet.addRow({ metric: 'Total Expenses', value: `CHF ${totalAmount.toFixed(2)}` })
+    summarySheet.addRow({ metric: 'Total VAT', value: `CHF ${totalVAT.toFixed(2)}` })
+    summarySheet.addRow({ metric: 'Total Count', value: totalCount })
+    summarySheet.addRow({ metric: 'Period', value: `${formatDate(startDate)} - ${formatDate(endDate)}` })
+    summarySheet.addRow({})
+    summarySheet.addRow({ metric: 'Category', value: 'Total Amount' })
+    Object.entries(categoryStats).forEach(([cat, stats]) => {
+      summarySheet.addRow({ metric: cat, value: `CHF ${stats.amount.toFixed(2)} (${stats.count} expenses)` })
+    })
+
+    // Add expenses sheet
+    worksheet.columns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Title', key: 'title', width: 30 },
+      { header: 'Category', key: 'category', width: 15 },
+      { header: 'Subcategory', key: 'subcategory', width: 15 },
+      { header: 'Vendor', key: 'vendor', width: 20 },
+      { header: 'Amount (CHF)', key: 'amount', width: 15 },
+      { header: 'VAT Rate (%)', key: 'vatRate', width: 12 },
+      { header: 'VAT Amount (CHF)', key: 'vatAmount', width: 15 },
+      { header: 'Total (CHF)', key: 'total', width: 15 },
+      { header: 'Payment Date', key: 'paymentDate', width: 12 },
+      { header: 'Payment Method', key: 'paymentMethod', width: 15 },
+      { header: 'Status', key: 'status', width: 12 },
+      { header: 'Tax Deductible', key: 'taxDeductible', width: 15 },
+      { header: 'Description', key: 'description', width: 40 }
+    ]
+
+    expenses.forEach(exp => {
+      const amountCHF = (exp.amount || 0) / 100
+      const vatAmountCHF = (exp.vat_amount || 0) / 100
+      const totalCHF = amountCHF + vatAmountCHF
+
+      worksheet.addRow({
+        date: formatDate(exp.expense_date),
+        title: exp.title || '',
+        category: exp.category || '',
+        subcategory: exp.subcategory || '',
+        vendor: exp.vendor_name || '',
+        amount: amountCHF,
+        vatRate: exp.vat_rate || 0,
+        vatAmount: vatAmountCHF,
+        total: totalCHF,
+        paymentDate: exp.payment_date ? formatDate(exp.payment_date) : '',
+        paymentMethod: exp.payment_method || '',
+        status: exp.status || 'PENDING',
+        taxDeductible: exp.is_tax_deductible ? 'Yes' : 'No',
+        description: exp.description || ''
+      })
+    })
+
+    // Add totals row
+    worksheet.addRow({})
+    worksheet.addRow({
+      title: 'TOTALS',
+      amount: totalAmount,
+      vatAmount: totalVAT,
+      total: totalAmount + totalVAT
+    })
+
+    // Style totals row
+    const totalsRow = worksheet.getRow(worksheet.rowCount)
+    totalsRow.font = { bold: true }
+    ;['amount', 'vatAmount', 'total'].forEach(key => {
+      const cell = totalsRow.getCell(key)
+      cell.numFmt = '#,##0.00'
+    })
+
+    // Format number columns
+    worksheet.getColumn('amount').numFmt = '#,##0.00'
+    worksheet.getColumn('vatAmount').numFmt = '#,##0.00'
+    worksheet.getColumn('total').numFmt = '#,##0.00'
+    worksheet.getColumn('vatRate').numFmt = '0.00'
+
+    // Generate Excel buffer
+    const excelBuffer = await workbook.xlsx.writeBuffer()
+
+    // Create ZIP archive
+    const archive = archiver('zip', { zlib: { level: 9 } })
+
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename="expenses-export-${startDate}-to-${endDate}.zip"`)
+
+    archive.pipe(res)
+
+    // Add PDF to ZIP
+    archive.append(pdfBuffer, { name: 'Expense-Report.pdf' })
+
+    // Add Excel to ZIP
+    archive.append(excelBuffer, { name: 'Expenses-Detail.xlsx' })
+
+    // Download and add all receipt files
+    const filePromises: Promise<void>[] = []
+    for (const expense of expenses) {
+      if (expense.attachments && Array.isArray(expense.attachments)) {
+        for (const attachment of expense.attachments) {
+          if (attachment.filePath) {
+            filePromises.push(
+              (async () => {
+                try {
+                  const { data: fileData, error: downloadError } = await supabaseAdmin.storage
+                    .from('expenses')
+                    .download(attachment.filePath)
+
+                  if (!downloadError && fileData) {
+                    const buffer = Buffer.from(await fileData.arrayBuffer())
+                    const fileName = attachment.originalName || attachment.filename || `file-${expense.id}.pdf`
+                    const category = expense.category || 'Uncategorized'
+                    archive.append(buffer, { name: `Receipts/${category}/${fileName}` })
+                  }
+                } catch (error) {
+                  console.error(`Error downloading file ${attachment.filePath}:`, error)
+                }
+              })()
+            )
+          }
+        }
+      }
+    }
+
+    // Wait for all files to be added
+    await Promise.all(filePromises)
+
+    // Finalize the archive
+    await archive.finalize()
+
+  } catch (error) {
+    console.error('Error exporting expenses:', error)
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    }
   }
 }
 

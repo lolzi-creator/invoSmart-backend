@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import { supabaseAdmin, db, handleSupabaseError, DatabaseExpense, ExpenseAttachment } from '../lib/supabase'
 import { AuthenticatedRequest } from '../types'
+import { createAuditLog } from './auditController'
 
 // Helper function to sanitize names for file paths
 const sanitizeForPath = (name: string): string => {
@@ -303,6 +304,28 @@ export const createExpense = async (req: AuthenticatedRequest, res: Response) =>
       handleSupabaseError(error, 'create expense')
     }
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        userId,
+        req.user!.name,
+        'EXPENSE_CREATED',
+        'EXPENSE',
+        expense.id,
+        {
+          title: expense.title,
+          amount: expense.amount / 100,
+          category: expense.category,
+          status: expense.status
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     return res.status(201).json({
       success: true,
       data: { expense },
@@ -347,6 +370,13 @@ export const updateExpense = async (req: AuthenticatedRequest, res: Response) =>
       budget_category,
       notes
     } = req.body
+
+    // Get current expense to check status changes
+    const { data: currentExpense } = await db.expenses()
+      .select('status, title, amount')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
 
     const updateData: any = {}
     
@@ -395,6 +425,38 @@ export const updateExpense = async (req: AuthenticatedRequest, res: Response) =>
         return res.status(404).json({ error: 'Expense not found' })
       }
       handleSupabaseError(error, 'update expense')
+    }
+
+    // Log audit event - check for status changes
+    try {
+      let auditAction = 'EXPENSE_UPDATED'
+      if (status !== undefined && currentExpense && status !== currentExpense.status) {
+        if (status === 'APPROVED') {
+          auditAction = 'EXPENSE_APPROVED'
+        } else if (status === 'PAID') {
+          auditAction = 'EXPENSE_PAID'
+        }
+      }
+
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        auditAction,
+        'EXPENSE',
+        id,
+        {
+          title: expense.title,
+          amount: expense.amount / 100,
+          category: expense.category,
+          oldStatus: currentExpense?.status,
+          newStatus: expense.status
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     return res.json({
@@ -450,6 +512,13 @@ export const deleteExpense = async (req: AuthenticatedRequest, res: Response) =>
       }
     }
 
+    // Get expense data before deletion for audit log
+    const { data: expenseData } = await db.expenses()
+      .select('title, amount, category')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
+
     // Delete from database
     const { error } = await db.expenses()
       .delete()
@@ -458,6 +527,27 @@ export const deleteExpense = async (req: AuthenticatedRequest, res: Response) =>
 
     if (error) {
       handleSupabaseError(error, 'delete expense')
+    }
+
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'EXPENSE_DELETED',
+        'EXPENSE',
+        id,
+        {
+          title: expenseData?.title,
+          amount: expenseData?.amount ? expenseData.amount / 100 : undefined,
+          category: expenseData?.category
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     return res.json({

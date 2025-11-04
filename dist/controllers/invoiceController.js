@@ -4,6 +4,7 @@ exports.deleteInvoice = exports.updateInvoice = exports.generateReminderPdf = ex
 const errorHandler_1 = require("../middleware/errorHandler");
 const config_1 = require("../config");
 const supabase_1 = require("../lib/supabase");
+const auditController_1 = require("./auditController");
 const createInvoiceResponse = (dbInvoice, customer, company, items) => {
     return {
         id: dbInvoice.id,
@@ -646,6 +647,18 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         catch (pdfError) {
             console.error('❌ Error generating PDF:', pdfError);
         }
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'INVOICE_CREATED', 'INVOICE', invoice.id, {
+                invoiceNumber: invoice.number,
+                customerId: invoice.customerId,
+                customerName: invoice.customer?.name,
+                total: invoice.total,
+                status: invoice.status
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
+        }
         res.status(201).json({
             success: true,
             message: 'Invoice created successfully',
@@ -685,6 +698,16 @@ exports.updateInvoiceStatus = (0, errorHandler_1.asyncHandler)(async (req, res) 
                 error: 'Invoice not found'
             });
             return;
+        }
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'INVOICE_STATUS_UPDATED', 'INVOICE', invoiceId, {
+                invoiceNumber: data.number,
+                oldStatus: data.status,
+                newStatus: status
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
         }
         res.json({
             success: true,
@@ -1968,6 +1991,17 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
         catch (emailError) {
             console.error('Error sending reminder email:', emailError);
         }
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'INVOICE_REMINDER_SENT', 'INVOICE', invoiceId, {
+                invoiceNumber: invoice.number,
+                reminderLevel: level,
+                customerEmail: invoice.customers?.email,
+                remainingAmount: (invoice.total - (invoice.paid_amount || 0)) / 100
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
+        }
         res.json({
             success: true,
             message: `Reminder ${level} sent successfully to mkrshkov@gmail.com`,
@@ -2511,6 +2545,14 @@ exports.deleteInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             return;
         }
         console.log(`Invoice ${invoice.number} deleted successfully`);
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'INVOICE_DELETED', 'INVOICE', id, {
+                invoiceNumber: invoice.number
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
+        }
         res.json({
             success: true,
             message: 'Invoice deleted successfully'

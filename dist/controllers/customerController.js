@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.importCustomers = exports.getCustomerStats = exports.deleteCustomer = exports.updateCustomer = exports.createCustomer = exports.getCustomer = exports.getCustomers = void 0;
 const errorHandler_1 = require("../middleware/errorHandler");
 const supabase_1 = require("../lib/supabase");
+const auditController_1 = require("./auditController");
 const createCustomerResponse = (dbCustomer) => {
     return {
         id: dbCustomer.id,
@@ -168,6 +169,16 @@ exports.createCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             return;
         }
         const customer = createCustomerResponse(data);
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'CUSTOMER_CREATED', 'CUSTOMER', customer.id, {
+                customerNumber: customer.customerNumber,
+                customerName: customer.name,
+                email: customer.email
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
+        }
         res.status(201).json({
             success: true,
             message: 'Customer created successfully',
@@ -244,6 +255,15 @@ exports.updateCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             return;
         }
         const customer = createCustomerResponse(data);
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'CUSTOMER_UPDATED', 'CUSTOMER', customerId, {
+                customerNumber: customer.customerNumber,
+                customerName: customer.name
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
+        }
         res.json({
             success: true,
             message: 'Customer updated successfully',
@@ -280,6 +300,11 @@ exports.deleteCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             });
             return;
         }
+        const { data: customerData } = await supabase_1.db.customers()
+            .select('customer_number, name')
+            .eq('id', customerId)
+            .eq('company_id', companyId)
+            .single();
         const { error } = await supabase_1.db.customers()
             .delete()
             .eq('id', customerId)
@@ -287,6 +312,15 @@ exports.deleteCustomer = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         if (error) {
             (0, supabase_1.handleSupabaseError)(error, 'delete customer');
             return;
+        }
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'CUSTOMER_DELETED', 'CUSTOMER', customerId, {
+                customerNumber: customerData?.customer_number,
+                customerName: customerData?.name
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
         }
         res.json({
             success: true,

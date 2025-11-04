@@ -20,6 +20,8 @@ import auditRoutes from './routes/audit'
 import invitationRoutes from './routes/invitations'
 import permissionRoutes from './routes/permissions'
 import companyRoutes from './routes/company'
+import dashboardRoutes from './routes/dashboard'
+import vatRateRoutes from './routes/vatRates'
 // import customerRoutes from './routes/customers'
 // import invoiceRoutes from './routes/invoices'
 // import paymentRoutes from './routes/payments'
@@ -110,6 +112,8 @@ app.use('/api/v1/audit', auditRoutes)
 app.use('/api/v1/invitations', invitationRoutes)
 app.use('/api/v1/permissions', permissionRoutes)
 app.use('/api/v1/company', companyRoutes)
+app.use('/api/v1/dashboard', dashboardRoutes)
+app.use('/api/v1/vat-rates', vatRateRoutes)
 console.log('✅ All API routes registered!')
 // app.use('/api/v1/customers', customerRoutes)
 // app.use('/api/v1/invoices', invoiceRoutes)

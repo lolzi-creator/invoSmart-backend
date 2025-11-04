@@ -1,33 +1,24 @@
 import { Router } from 'express'
+import { getAuditLogs, getAuditStats } from '../controllers/auditController'
+import { authenticateToken } from '../middleware/auth'
 
 const router = Router()
 
-// Get audit logs
-router.get('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Audit logs endpoint - coming soon',
-    data: []
-  })
-})
+router.use(authenticateToken)
 
-// Get audit log by ID
-router.get('/:id', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Get audit log by ID - coming soon',
-    data: null
-  })
-})
+/**
+ * @route   GET /api/v1/audit
+ * @desc    Get audit logs with filters and pagination
+ * @access  Private
+ */
+router.get('/', getAuditLogs)
 
-// Create audit log
-router.post('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Create audit log - coming soon',
-    data: null
-  })
-})
+/**
+ * @route   GET /api/v1/audit/stats
+ * @desc    Get audit log statistics
+ * @access  Private
+ */
+router.get('/stats', getAuditStats)
 
 export default router
 

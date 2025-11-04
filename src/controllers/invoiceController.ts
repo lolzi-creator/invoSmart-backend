@@ -19,6 +19,7 @@ import {
   DatabaseCustomer,
   DatabaseCompany 
 } from '../lib/supabase'
+import { createAuditLog } from './auditController'
 
 // Helper function to convert DB invoice to API invoice
 const createInvoiceResponse = (
@@ -824,6 +825,29 @@ export const createInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
       // Don't fail the invoice creation if PDF generation fails
     }
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'INVOICE_CREATED',
+        'INVOICE',
+        invoice.id,
+        {
+          invoiceNumber: invoice.number,
+          customerId: invoice.customerId,
+          customerName: invoice.customer?.name,
+          total: invoice.total,
+          status: invoice.status
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     res.status(201).json({
       success: true,
       message: 'Invoice created successfully',
@@ -875,6 +899,27 @@ export const updateInvoiceStatus = asyncHandler(async (req: AuthenticatedRequest
         error: 'Invoice not found'
       })
       return
+    }
+
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'INVOICE_STATUS_UPDATED',
+        'INVOICE',
+        invoiceId,
+        {
+          invoiceNumber: data.number,
+          oldStatus: data.status,
+          newStatus: status
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     res.json({
@@ -2312,6 +2357,28 @@ export const sendInvoiceReminder = asyncHandler(async (req: AuthenticatedRequest
       console.error('Error sending reminder email:', emailError)
     }
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'INVOICE_REMINDER_SENT',
+        'INVOICE',
+        invoiceId,
+        {
+          invoiceNumber: invoice.number,
+          reminderLevel: level,
+          customerEmail: invoice.customers?.email,
+          remainingAmount: (invoice.total - (invoice.paid_amount || 0)) / 100
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     res.json({
       success: true,
       message: `Reminder ${level} sent successfully to mkrshkov@gmail.com`,
@@ -2941,6 +3008,25 @@ export const deleteInvoice = asyncHandler(async (req: AuthenticatedRequest, res:
     }
 
     console.log(`Invoice ${invoice.number} deleted successfully`)
+
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId!,
+        req.user!.id,
+        req.user!.name,
+        'INVOICE_DELETED',
+        'INVOICE',
+        id,
+        {
+          invoiceNumber: invoice.number
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
 
     res.json({
       success: true,

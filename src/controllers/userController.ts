@@ -202,6 +202,7 @@ export const inviteUser = async (req: AuthenticatedRequest, res: Response) => {
     // Log audit event
     try {
       await createAuditLog(
+        req.user!.companyId,
         req.user!.id,
         req.user!.name,
         'USER_INVITED',
@@ -268,6 +269,7 @@ export const updateUserRole = async (req: AuthenticatedRequest, res: Response) =
 
     // Log audit event
     await createAuditLog(
+      req.user!.companyId,
       req.user!.id,
       req.user!.name,
       'USER_ROLE_UPDATED',

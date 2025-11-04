@@ -11,6 +11,7 @@ import {
   handleSupabaseError, 
   DatabaseCustomer 
 } from '../lib/supabase'
+import { createAuditLog } from './auditController'
 
 // Helper function to convert DB customer to API customer
 const createCustomerResponse = (dbCustomer: DatabaseCustomer): Customer => {
@@ -245,6 +246,27 @@ export const createCustomer = asyncHandler(async (req: AuthenticatedRequest, res
 
     const customer = createCustomerResponse(data as DatabaseCustomer)
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'CUSTOMER_CREATED',
+        'CUSTOMER',
+        customer.id,
+        {
+          customerNumber: customer.customerNumber,
+          customerName: customer.name,
+          email: customer.email
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     res.status(201).json({
       success: true,
       message: 'Customer created successfully',
@@ -341,6 +363,26 @@ export const updateCustomer = asyncHandler(async (req: AuthenticatedRequest, res
 
     const customer = createCustomerResponse(data as DatabaseCustomer)
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'CUSTOMER_UPDATED',
+        'CUSTOMER',
+        customerId,
+        {
+          customerNumber: customer.customerNumber,
+          customerName: customer.name
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     res.json({
       success: true,
       message: 'Customer updated successfully',
@@ -389,6 +431,13 @@ export const deleteCustomer = asyncHandler(async (req: AuthenticatedRequest, res
       return
     }
 
+    // Get customer data before deletion for audit log
+    const { data: customerData } = await db.customers()
+      .select('customer_number, name')
+      .eq('id', customerId)
+      .eq('company_id', companyId)
+      .single()
+
     // Delete customer
     const { error } = await db.customers()
       .delete()
@@ -398,6 +447,26 @@ export const deleteCustomer = asyncHandler(async (req: AuthenticatedRequest, res
     if (error) {
       handleSupabaseError(error, 'delete customer')
       return
+    }
+
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'CUSTOMER_DELETED',
+        'CUSTOMER',
+        customerId,
+        {
+          customerNumber: customerData?.customer_number,
+          customerName: customerData?.name
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     res.json({

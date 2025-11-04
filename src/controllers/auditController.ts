@@ -17,6 +17,7 @@ export interface AuditLog {
 
 // Create audit log entry
 export const createAuditLog = async (
+  companyId: string,
   userId: string,
   userName: string,
   action: string,
@@ -30,6 +31,7 @@ export const createAuditLog = async (
     const { error } = await supabaseAdmin
       .from('audit_logs')
       .insert({
+        company_id: companyId,
         user_id: userId,
         user_name: userName,
         action,
@@ -155,5 +157,6 @@ export const getAuditStats = async (req: AuthenticatedRequest, res: Response) =>
     return res.status(500).json({ success: false, message: 'Internal server error' })
   }
 }
+
 
 

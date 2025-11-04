@@ -4,6 +4,7 @@ exports.deletePayment = exports.updatePayment = exports.getPaymentStats = export
 const errorHandler_1 = require("../middleware/errorHandler");
 const types_1 = require("../types");
 const supabase_1 = require("../lib/supabase");
+const auditController_1 = require("./auditController");
 const createPaymentResponse = (dbPayment) => {
     return {
         id: dbPayment.id,
@@ -540,6 +541,18 @@ exports.matchPayment = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         }
         await updateInvoiceAfterPayment(invoiceId);
         const matchedPayment = createPaymentResponse(updatedPayment);
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'PAYMENT_MATCHED', 'PAYMENT', paymentId, {
+                amount: payment.amount / 100,
+                invoiceId: invoiceId,
+                invoiceNumber: invoice.number,
+                reference: payment.reference,
+                confidence: 'MANUAL'
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
+        }
         res.json({
             success: true,
             message: 'Payment matched successfully',
@@ -629,6 +642,17 @@ exports.importPayments = (0, errorHandler_1.asyncHandler)(async (req, res) => {
                 console.log('No match found for payment:', newPayment.id);
                 importedPayments.push(createPaymentResponse(newPayment));
             }
+        }
+        try {
+            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'PAYMENT_IMPORTED', 'PAYMENT', undefined, {
+                count: importedPayments.length,
+                automaticallyMatched: matchedCount.automatic,
+                needsManualReview: importedPayments.length - matchedCount.automatic,
+                importBatch
+            }, req.ip, req.get('User-Agent'));
+        }
+        catch (auditError) {
+            console.error('Error creating audit log:', auditError);
         }
         res.status(201).json({
             success: true,

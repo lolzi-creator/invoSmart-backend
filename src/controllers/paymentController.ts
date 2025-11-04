@@ -12,6 +12,7 @@ import {
   DatabasePayment,
   DatabaseInvoice
 } from '../lib/supabase'
+import { createAuditLog } from './auditController'
 
 // Helper function to convert DB payment to API payment
 const createPaymentResponse = (dbPayment: DatabasePayment): Payment => {
@@ -721,6 +722,29 @@ export const matchPayment = asyncHandler(async (req: AuthenticatedRequest, res: 
 
     const matchedPayment = createPaymentResponse(updatedPayment as DatabasePayment)
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'PAYMENT_MATCHED',
+        'PAYMENT',
+        paymentId,
+        {
+          amount: payment.amount / 100,
+          invoiceId: invoiceId,
+          invoiceNumber: invoice.number,
+          reference: payment.reference,
+          confidence: 'MANUAL'
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     res.json({
       success: true,
       message: 'Payment matched successfully',
@@ -840,6 +864,28 @@ export const importPayments = asyncHandler(async (req: AuthenticatedRequest, res
         console.log('No match found for payment:', newPayment.id)
         importedPayments.push(createPaymentResponse(newPayment as DatabasePayment))
       }
+    }
+
+    // Log audit event for payment import
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'PAYMENT_IMPORTED',
+        'PAYMENT',
+        undefined,
+        {
+          count: importedPayments.length,
+          automaticallyMatched: matchedCount.automatic,
+          needsManualReview: importedPayments.length - matchedCount.automatic,
+          importBatch
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     res.status(201).json({

@@ -3,6 +3,8 @@ import { asyncHandler } from '../middleware/errorHandler'
 import { db, handleSupabaseError, supabaseAdmin } from '../lib/supabase'
 import { Quote, QuoteItem, AuthenticatedRequest } from '../types'
 import { config } from '../config'
+import { createAuditLog } from './auditController'
+import { emailTranslations, getCustomerLanguage } from '../utils/emailTranslations'
 
 // Helper function to convert DB quote to API quote
 const createQuoteResponse = (dbQuote: any, customer?: any, company?: any, items?: any[]): Quote => {
@@ -123,6 +125,7 @@ export const getQuotes = asyncHandler(async (req: AuthenticatedRequest, res: Res
   const limit = parseInt(req.query.limit as string) || 10
   const offset = parseInt(req.query.offset as string) || 0
   const search = req.query.search as string || ''
+  const customerId = req.query.customerId as string || ''
 
   try {
     let query = db.quotes()
@@ -135,6 +138,11 @@ export const getQuotes = asyncHandler(async (req: AuthenticatedRequest, res: Res
       .eq('company_id', companyId)
       .order('date', { ascending: false })
       .range(offset, offset + limit - 1)
+
+    // Filter by customer ID if provided
+    if (customerId) {
+      query = query.eq('customer_id', customerId)
+    }
 
     if (search) {
       query = query.or(`number.ilike.%${search}%,customers.name.ilike.%${search}%`)
@@ -277,7 +285,7 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     const vatAmount = itemsData.reduce((sum, item) => sum + item.vat_amount, 0)
-    const total = subtotal * 100 + vatAmount - discountAmount * 100
+    const total = Math.round(subtotal * 100) + vatAmount - Math.round(discountAmount * 100)
 
     // Generate acceptance token
     const acceptanceToken = Buffer.from(`${companyId}-${Date.now()}`).toString('base64').replace(/[^a-zA-Z0-9]/g, '')
@@ -298,7 +306,7 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
         status: 'DRAFT' as any,
         subtotal: Math.round(subtotal * 100),
         vat_amount: vatAmount,
-        total,
+        total: Math.round(total),
         discount_code: discountCode || null,
         discount_amount: Math.round(discountAmount * 100),
         internal_notes: internalNotes || null,
@@ -600,6 +608,29 @@ export const createQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
       // Don't fail the quote creation if PDF generation fails
     }
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'QUOTE_CREATED',
+        'QUOTE',
+        fullQuote.id,
+        {
+          quoteNumber: fullQuote.number,
+          customerId: fullQuote.customerId,
+          customerName: fullQuote.customer?.name,
+          total: fullQuote.total,
+          status: fullQuote.status
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     res.status(201).json({
       success: true,
       message: 'Quote created successfully',
@@ -691,7 +722,7 @@ export const updateQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
     }
 
     const vatAmount = itemsData.reduce((sum, item) => sum + item.vat_amount, 0)
-    const total = subtotal * 100 + vatAmount - discountAmount * 100
+    const total = Math.round(subtotal * 100) + vatAmount - Math.round(discountAmount * 100)
 
     // Update the quote
     const { data: updatedQuote, error: updateError } = await db.quotes()
@@ -702,7 +733,7 @@ export const updateQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
         status: status || existingQuote.status,
         subtotal: Math.round(subtotal * 100),
         vat_amount: vatAmount,
-        total,
+        total: Math.round(total),
         discount_code: discountCode || null,
         discount_amount: Math.round(discountAmount * 100),
         internal_notes: internalNotes || null
@@ -763,6 +794,28 @@ export const updateQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
       completeQuote.quote_items
     )
 
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'QUOTE_UPDATED',
+        'QUOTE',
+        quoteId,
+        {
+          quoteNumber: fullQuote.number,
+          customerName: fullQuote.customer?.name,
+          total: fullQuote.total,
+          status: fullQuote.status
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
+    }
+
     res.json({
       success: true,
       message: 'Quote updated successfully',
@@ -806,6 +859,27 @@ export const updateQuoteStatus = asyncHandler(async (req: AuthenticatedRequest, 
         error: 'Quote not found'
       })
       return
+    }
+
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'QUOTE_STATUS_UPDATED',
+        'QUOTE',
+        quoteId,
+        {
+          quoteNumber: data.number,
+          oldStatus: data.status,
+          newStatus: status
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     res.json({
@@ -865,6 +939,10 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
     const verifiedEmail = 'mkrshkov@gmail.com'
     const fullQuote = createQuoteResponse(quote, quote.customers, quote.companies, quote.quote_items)
     
+    // Get customer language for email
+    const customerLang = getCustomerLanguage(fullQuote.customer?.language)
+    const emailT = emailTranslations[customerLang].quote
+    
     // Try to fetch the PDF from storage
     let pdfAttachment = null
     
@@ -905,7 +983,7 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
     const emailOptions: any = {
       from: `${config.email.fromName} <${config.email.fromEmail}>`,
       to: [verifiedEmail],
-      subject: `Quote ${fullQuote.number} - ${fullQuote.customer?.name || 'Customer'}`,
+      subject: emailT.subject(fullQuote.number, fullQuote.customer?.name || 'Customer'),
       html: `
         <!DOCTYPE html>
         <html>
@@ -935,11 +1013,11 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
                   <tr>
                     <td style="padding: 40px;">
                       <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                        Dear ${fullQuote.customer?.name},
+                        ${emailT.greeting(fullQuote.customer?.name || 'Customer')}
                       </p>
                       
                       <p style="margin: 0 0 30px; color: #4b5563; font-size: 15px; line-height: 1.6;">
-                        Thank you for your interest in our services. We are pleased to present you with the following quote for your consideration.
+                        ${emailT.intro}
                       </p>
                       
                       <!-- Quote Details Card -->
@@ -949,20 +1027,20 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
                             <table width="100%" cellpadding="0" cellspacing="0">
                               <tr>
                                 <td style="padding: 8px 0;">
-                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Quote Number</span>
+                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">${emailT.quoteNumber}</span>
                                   <div style="color: #111827; font-size: 16px; font-weight: 600; margin-top: 4px;">${fullQuote.number}</div>
                                 </td>
                               </tr>
                               <tr>
                                 <td style="padding: 8px 0; border-top: 1px solid #e5e7eb;">
-                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Quote Date</span>
-                                  <div style="color: #111827; font-size: 16px; font-weight: 600; margin-top: 4px;">${new Date(fullQuote.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">${emailT.quoteDate}</span>
+                                  <div style="color: #111827; font-size: 16px; font-weight: 600; margin-top: 4px;">${new Date(fullQuote.date).toLocaleDateString(customerLang === 'de' ? 'de-CH' : customerLang === 'fr' ? 'fr-CH' : customerLang === 'it' ? 'it-CH' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
                                 </td>
                               </tr>
                               <tr>
                                 <td style="padding: 8px 0; border-top: 1px solid #e5e7eb;">
-                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Valid Until</span>
-                                  <div style="color: #111827; font-size: 16px; font-weight: 600; margin-top: 4px;">${new Date(fullQuote.expiryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">${emailT.validUntil}</span>
+                                  <div style="color: #111827; font-size: 16px; font-weight: 600; margin-top: 4px;">${new Date(fullQuote.expiryDate).toLocaleDateString(customerLang === 'de' ? 'de-CH' : customerLang === 'fr' ? 'fr-CH' : customerLang === 'it' ? 'it-CH' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
                                 </td>
                               </tr>
                             </table>
@@ -973,8 +1051,8 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
                             <table width="100%" cellpadding="0" cellspacing="0">
                               <tr>
                                 <td>
-                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">Total Amount</span>
-                                  <div style="color: #2563eb; font-size: 32px; font-weight: 700; margin-top: 8px;">CHF ${(fullQuote.total / 100).toFixed(2)}</div>
+                                  <span style="color: #6b7280; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px;">${emailT.totalAmount}</span>
+                                  <div style="color: #2563eb; font-size: 32px; font-weight: 700; margin-top: 8px;">CHF ${fullQuote.total.toFixed(2)}</div>
                                 </td>
                               </tr>
                             </table>
@@ -983,19 +1061,19 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
                       </table>
                       
                       <p style="margin: 0 0 30px; color: #4b5563; font-size: 15px; line-height: 1.6;">
-                        Please review the attached quote PDF for complete details. The quote will remain valid until <strong>${new Date(fullQuote.expiryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</strong>.
+                        ${emailT.reviewAttached} <strong>${new Date(fullQuote.expiryDate).toLocaleDateString(customerLang === 'de' ? 'de-CH' : customerLang === 'fr' ? 'fr-CH' : customerLang === 'it' ? 'it-CH' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</strong>.
                       </p>
           
           ${fullQuote.acceptanceLink ? `
                       <div style="text-align: center; margin: 30px 0;">
                         <a href="${fullQuote.acceptanceLink}" style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: #ffffff; text-decoration: none; padding: 16px 32px; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(37, 99, 235, 0.3); transition: all 0.2s;">
-              Accept Quote
+              ${emailT.acceptButton}
             </a>
           </div>
           ` : ''}
           
                       <p style="margin: 20px 0 0; color: #9ca3af; font-size: 13px; line-height: 1.6;">
-                        If you have any questions or need clarification on any aspect of this quote, please don't hesitate to contact us.
+                        ${emailT.questions}
                       </p>
                     </td>
                   </tr>
@@ -1004,7 +1082,7 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
                   <tr>
                     <td style="padding: 30px 40px; background-color: #f9fafb; border-top: 1px solid #e5e7eb;">
                       <p style="margin: 0 0 8px; color: #1f2937; font-size: 15px; font-weight: 600;">
-                        Best regards,
+                        ${emailT.bestRegards},
                       </p>
                       <p style="margin: 0; color: #6b7280; font-size: 14px;">
                         ${fullQuote.company?.name || 'Your Team'}
@@ -1020,7 +1098,7 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
         </body>
         </html>
       `,
-      text: `Quote ${fullQuote.number}\n\nDear ${fullQuote.customer?.name},\n\nThank you for your interest in our services. We are pleased to present you with the following quote for your consideration.\n\nQuote Number: ${fullQuote.number}\nQuote Date: ${new Date(fullQuote.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}\nValid Until: ${new Date(fullQuote.expiryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}\nTotal Amount: CHF ${(fullQuote.total / 100).toFixed(2)}\n\nPlease review the attached quote PDF for complete details. The quote will remain valid until ${new Date(fullQuote.expiryDate).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}.\n\nBest regards,\n${fullQuote.company?.name || 'Your Team'}`
+      text: `${emailT.subject(fullQuote.number, fullQuote.customer?.name || 'Customer')}\n\n${emailT.greeting(fullQuote.customer?.name || 'Customer')}\n\n${emailT.intro}\n\n${emailT.quoteNumber}: ${fullQuote.number}\n${emailT.quoteDate}: ${new Date(fullQuote.date).toLocaleDateString(customerLang === 'de' ? 'de-CH' : customerLang === 'fr' ? 'fr-CH' : customerLang === 'it' ? 'it-CH' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })}\n${emailT.validUntil}: ${new Date(fullQuote.expiryDate).toLocaleDateString(customerLang === 'de' ? 'de-CH' : customerLang === 'fr' ? 'fr-CH' : customerLang === 'it' ? 'it-CH' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })}\n${emailT.totalAmount}: CHF ${fullQuote.total.toFixed(2)}\n\n${emailT.reviewAttached} ${new Date(fullQuote.expiryDate).toLocaleDateString(customerLang === 'de' ? 'de-CH' : customerLang === 'fr' ? 'fr-CH' : customerLang === 'it' ? 'it-CH' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })}.\n\n${emailT.bestRegards},\n${fullQuote.company?.name || 'Your Team'}`
     }
     
     // Add PDF attachment if available
@@ -1041,6 +1119,28 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
           email_sent_count: (quote.email_sent_count || 0) + 1
         })
         .eq('id', quoteId)
+      
+      // Log audit event
+      try {
+        await createAuditLog(
+          companyId,
+          req.user!.id,
+          req.user!.name,
+          'QUOTE_SENT',
+          'QUOTE',
+          quoteId,
+          {
+            quoteNumber: fullQuote.number,
+            customerName: fullQuote.customer?.name,
+            customerEmail: verifiedEmail,
+            total: fullQuote.total
+          },
+          req.ip,
+          req.get('User-Agent')
+        )
+      } catch (auditError) {
+        console.error('Error creating audit log:', auditError)
+      }
       
       res.json({
         success: true,
@@ -1424,6 +1524,9 @@ export const deleteQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
       return
     }
 
+    // Get quote data before deletion for audit log
+    const quoteNumber = quote.number
+
     // Delete the quote
     const { error: deleteError } = await db.quotes()
       .delete()
@@ -1433,6 +1536,25 @@ export const deleteQuote = asyncHandler(async (req: AuthenticatedRequest, res: R
     if (deleteError) {
       handleSupabaseError(deleteError, 'delete quote')
       return
+    }
+
+    // Log audit event
+    try {
+      await createAuditLog(
+        companyId,
+        req.user!.id,
+        req.user!.name,
+        'QUOTE_DELETED',
+        'QUOTE',
+        quoteId,
+        {
+          quoteNumber: quoteNumber
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     res.json({
@@ -2269,6 +2391,29 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
     } catch (emailError) {
       console.error('❌ Failed to send invoice email:', emailError)
       // Don't fail the acceptance if email fails
+    }
+
+    // Log audit event (public endpoint - use customer email as identifier)
+    try {
+      await createAuditLog(
+        quoteData.company_id,
+        '00000000-0000-0000-0000-000000000000' as any, // Placeholder UUID for public actions
+        customerEmail || quote.customer?.email || 'Customer',
+        'QUOTE_ACCEPTED',
+        'QUOTE',
+        quoteData.id,
+        {
+          quoteNumber: quote.number,
+          invoiceNumber: completeInvoice.number,
+          customerName: quote.customer?.name,
+          customerEmail: customerEmail || quote.customer?.email,
+          total: quote.total
+        },
+        req.ip,
+        req.get('User-Agent')
+      )
+    } catch (auditError) {
+      console.error('Error creating audit log:', auditError)
     }
 
     res.json({

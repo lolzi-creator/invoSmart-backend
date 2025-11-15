@@ -2,9 +2,214 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.deleteInvoice = exports.updateInvoice = exports.generateReminderPdf = exports.sendInvoiceReminder = exports.generateInvoicePdf = exports.generateInvoiceQR = exports.getInvoiceStats = exports.updateInvoiceStatus = exports.createInvoice = exports.getInvoice = exports.getInvoices = void 0;
 const errorHandler_1 = require("../middleware/errorHandler");
-const config_1 = require("../config");
 const supabase_1 = require("../lib/supabase");
 const auditController_1 = require("./auditController");
+const emailService_1 = require("../services/emailService");
+const pdfTemplates_1 = require("../utils/pdfTemplates");
+const generateAndSaveInvoicePdf = async (invoice, company, customer) => {
+    try {
+        console.log('📄 Generating PDF for invoice:', invoice.number);
+        let logoBase64 = null;
+        if (company.logo_url) {
+            try {
+                let logoPath = null;
+                if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+                    logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0];
+                }
+                else if (company.logo_url.includes('/logos/')) {
+                    logoPath = company.logo_url.split('/logos/')[1].split('?')[0];
+                }
+                else if (company.logo_url.startsWith('logos/')) {
+                    logoPath = company.logo_url.replace('logos/', '').split('?')[0];
+                }
+                else {
+                    logoPath = company.logo_url.split('?')[0];
+                }
+                if (logoPath) {
+                    const { data: logoData, error: logoError } = await supabase_1.supabaseAdmin.storage
+                        .from('logos')
+                        .download(logoPath);
+                    if (!logoError && logoData) {
+                        const logoBuffer = Buffer.from(await logoData.arrayBuffer());
+                        const logoMimeType = logoData.type || 'image/png';
+                        logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`;
+                    }
+                }
+            }
+            catch (logoFetchError) {
+                console.error('❌ Error fetching logo for PDF:', logoFetchError);
+            }
+        }
+        const { referenceType, iban } = getReferenceTypeAndIban(invoice.qr_reference, company);
+        const QRCode = require('qrcode');
+        const qrPayload = [
+            'SPC', '0200', '1',
+            iban,
+            'S', company.name, company.address, '', company.zip, company.city, 'CH',
+            '', '', '', '', '', '', '',
+            (invoice.total / 100).toFixed(2), 'CHF',
+            'S', customer.name,
+            customer.address, '',
+            customer.zip, customer.city,
+            customer.country || 'CH',
+            referenceType,
+            invoice.qr_reference,
+            `Invoice ${invoice.number}`,
+            'EPD'
+        ].join('\n');
+        const qrCodeImage = await QRCode.toDataURL(qrPayload, {
+            type: 'image/png',
+            width: 140,
+            margin: 1,
+            color: { dark: '#000000', light: '#FFFFFF' }
+        });
+        const { data: invoiceItems } = await supabase_1.db.invoiceItems()
+            .select('*')
+            .eq('invoice_id', invoice.id)
+            .order('sort_order', { ascending: true });
+        const templateLanguage = ((invoice.customers?.language ?? customer.language) ?? company.default_language ?? 'de').toLowerCase();
+        const htmlTemplate = (0, pdfTemplates_1.generateUnifiedInvoicePdfTemplate)({
+            invoice: {
+                number: invoice.number,
+                date: invoice.date,
+                due_date: invoice.due_date,
+                service_date: invoice.service_date,
+                qr_reference: invoice.qr_reference,
+                subtotal: invoice.subtotal,
+                discount_amount: invoice.discount_amount,
+                vat_amount: invoice.vat_amount,
+                total: invoice.total,
+                invoice_items: invoiceItems || []
+            },
+            customer: {
+                name: customer.name,
+                company: customer.company,
+                address: customer.address,
+                zip: customer.zip,
+                city: customer.city,
+                country: customer.country,
+                email: customer.email,
+                phone: customer.phone,
+                payment_terms: customer.payment_terms
+            },
+            company: {
+                name: company.name,
+                address: company.address,
+                zip: company.zip,
+                city: company.city,
+                email: company.email,
+                phone: company.phone,
+                uid: company.uid,
+                vat_number: company.vat_number,
+                iban: company.iban,
+                qr_iban: company.qr_iban,
+                website: company.website
+            },
+            qrCodeImage,
+            logoBase64,
+            paymentReference: invoice.qr_reference,
+            referenceType,
+            iban,
+            language: templateLanguage
+        });
+        const htmlPdf = require('html-pdf-node');
+        const options = {
+            format: 'A4',
+            margin: { top: '20mm', bottom: '20mm', left: '20mm', right: '20mm' },
+            printBackground: true,
+            displayHeaderFooter: false,
+            timeout: 30000,
+            preferCSSPageSize: true,
+            emulateMedia: 'print',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--run-all-compositor-stages-before-draw'
+            ]
+        };
+        const file = { content: htmlTemplate };
+        const pdfBuffer = await htmlPdf.generatePdf(file, options);
+        const sanitizeForPath = (name) => {
+            return name.replace(/[^a-zA-Z0-9-_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+        };
+        const companyName = sanitizeForPath(company.name || 'Company');
+        const customerName = sanitizeForPath(customer.name || 'Customer');
+        const invoiceNumber = sanitizeForPath(invoice.number);
+        const fileName = `Invoice-${invoice.number}.pdf`;
+        const filePath = `${companyName}/${customerName}/${invoiceNumber}/${fileName}`;
+        const { data: uploadData, error: uploadError } = await supabase_1.supabaseAdmin.storage
+            .from('invoices')
+            .upload(filePath, pdfBuffer, {
+            contentType: 'application/pdf',
+            upsert: true
+        });
+        if (uploadError) {
+            console.error('❌ Failed to upload PDF to storage:', uploadError);
+            return null;
+        }
+        console.log('✅ PDF uploaded successfully:', uploadData.path);
+        const fileInfo = {
+            id: crypto.randomUUID(),
+            fileName: fileName,
+            filePath: uploadData.path,
+            fileType: 'invoice_pdf',
+            uploadedAt: new Date().toISOString()
+        };
+        const currentNotes = invoice.internal_notes || '{}';
+        let notesData = {};
+        try {
+            if (currentNotes && currentNotes.trim() !== '' && currentNotes.trim().startsWith('{')) {
+                notesData = JSON.parse(currentNotes);
+            }
+        }
+        catch (e) {
+            notesData = { files: [] };
+        }
+        if (!notesData.files) {
+            notesData.files = [];
+        }
+        notesData.files = notesData.files.filter((f) => f.fileType !== 'invoice_pdf');
+        notesData.files.push(fileInfo);
+        await supabase_1.db.invoices()
+            .update({
+            internal_notes: JSON.stringify(notesData)
+        })
+            .eq('id', invoice.id);
+        console.log('📄 PDF file record stored in invoice');
+        return uploadData.path;
+    }
+    catch (error) {
+        console.error('❌ Error generating and saving invoice PDF:', error);
+        return null;
+    }
+};
+const getReferenceTypeAndIban = (reference, company) => {
+    const isQRReference = /^\d{27}$/.test(reference);
+    const isSCORReference = /^RF\d{2}\d+$/.test(reference);
+    if (isQRReference) {
+        if (!company.qr_iban || !company.qr_iban.trim()) {
+            throw new Error('QR reference requires QR-IBAN, but company has no QR-IBAN configured');
+        }
+        return {
+            referenceType: 'QRR',
+            iban: company.qr_iban.replace(/\s/g, '')
+        };
+    }
+    else if (isSCORReference) {
+        if (!company.iban || !company.iban.trim()) {
+            throw new Error('SCOR reference requires normal IBAN, but company has no IBAN configured');
+        }
+        return {
+            referenceType: 'SCOR',
+            iban: company.iban.replace(/\s/g, '')
+        };
+    }
+    else {
+        throw new Error(`Invalid reference format: must be 27-digit numeric (QR) or start with RF (SCOR), got: ${reference}`);
+    }
+};
 const createInvoiceResponse = (dbInvoice, customer, company, items) => {
     return {
         id: dbInvoice.id,
@@ -54,6 +259,7 @@ const createInvoiceResponse = (dbInvoice, customer, company, items) => {
         } : undefined,
         date: new Date(dbInvoice.date),
         dueDate: new Date(dbInvoice.due_date),
+        serviceDate: new Date(dbInvoice.service_date),
         status: dbInvoice.status,
         subtotal: dbInvoice.subtotal / 100,
         vatAmount: dbInvoice.vat_amount / 100,
@@ -302,8 +508,26 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         });
         return;
     }
-    const { customerId, date = new Date(), dueDate, items = [], notes, discountCode } = req.body;
+    const { customerId, date = new Date(), dueDate, serviceDate, items = [], notes, discountCode } = req.body;
+    if (!serviceDate) {
+        res.status(400).json({
+            success: false,
+            error: 'Leistungsdatum ist zwingend erforderlich für die MWST-Abrechnung'
+        });
+        return;
+    }
     try {
+        const { data: company, error: companyError } = await supabase_1.db.companies()
+            .select('id, qr_iban, iban')
+            .eq('id', companyId)
+            .single();
+        if (companyError || !company) {
+            res.status(404).json({
+                success: false,
+                error: 'Company not found'
+            });
+            return;
+        }
         const { data: customer, error: customerError } = await supabase_1.db.customers()
             .select('*')
             .eq('id', customerId)
@@ -317,7 +541,7 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             return;
         }
         const invoiceNumber = await (0, supabase_1.generateInvoiceNumber)(companyId);
-        const qrReference = await (0, supabase_1.generateQRReference)(invoiceNumber, companyId);
+        const { reference: paymentReference } = await (0, supabase_1.generatePaymentReference)(invoiceNumber, companyId, company);
         let calculatedDueDate = dueDate;
         if (!calculatedDueDate) {
             const invoiceDate = new Date(date);
@@ -362,10 +586,11 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             company_id: companyId,
             customer_id: customerId,
             number: invoiceNumber,
-            qr_reference: qrReference,
+            qr_reference: paymentReference,
             status: 'DRAFT',
             date: typeof date === 'string' ? date : date.toISOString().split('T')[0],
             due_date: typeof calculatedDueDate === 'string' ? calculatedDueDate : calculatedDueDate.toISOString().split('T')[0],
+            service_date: typeof serviceDate === 'string' ? serviceDate : new Date(serviceDate).toISOString().split('T')[0],
             subtotal: Math.round(subtotal * 100),
             vat_amount: Math.round(vatTotal * 100),
             total: Math.round(total * 100),
@@ -411,241 +636,16 @@ exports.createInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         }
         const invoice = createInvoiceResponse(completeInvoice, completeInvoice.customers, completeInvoice.companies, completeInvoice.invoice_items);
         try {
-            console.log('📄 Generating PDF for new invoice:', invoice.number);
-            const { Resend } = require('resend');
-            const resend = new Resend(process.env.RESEND_API_KEY);
-            const { data: company, error: companyError } = await supabase_1.db.companies()
+            const { data: companyForPdf } = await supabase_1.db.companies()
                 .select('*')
                 .eq('id', companyId)
                 .single();
-            if (companyError || !company) {
-                console.error('❌ Company not found for PDF generation:', companyError);
-            }
-            else {
-                let logoBase64 = null;
-                if (company.logo_url) {
-                    try {
-                        console.log('🔍 Attempting to fetch logo for invoice creation PDF. Logo URL:', company.logo_url);
-                        let logoPath = null;
-                        if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
-                            logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0];
-                        }
-                        else if (company.logo_url.includes('/logos/')) {
-                            logoPath = company.logo_url.split('/logos/')[1].split('?')[0];
-                        }
-                        else if (company.logo_url.startsWith('logos/')) {
-                            logoPath = company.logo_url.replace('logos/', '').split('?')[0];
-                        }
-                        else {
-                            logoPath = company.logo_url.split('?')[0];
-                        }
-                        console.log('📂 Extracted logo path for invoice creation:', logoPath);
-                        if (logoPath) {
-                            const { data: logoData, error: logoError } = await supabase_1.supabaseAdmin.storage
-                                .from('logos')
-                                .download(logoPath);
-                            if (logoError) {
-                                console.error('❌ Error downloading logo for invoice creation:', logoError);
-                            }
-                            else if (logoData) {
-                                const logoBuffer = Buffer.from(await logoData.arrayBuffer());
-                                const logoMimeType = logoData.type || 'image/png';
-                                logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`;
-                                console.log('✅ Logo converted to base64 for invoice creation PDF');
-                            }
-                        }
-                    }
-                    catch (logoFetchError) {
-                        console.error('❌ Error fetching logo for invoice creation PDF:', logoFetchError);
-                    }
-                }
-                const QRCode = require('qrcode');
-                const qrReference = invoice.qrReference;
-                const qrPayload = [
-                    'SPC', '0200', '1',
-                    company.iban || 'CH2109000000100015000.6',
-                    'S', company.name, company.address, '', company.zip, company.city, 'CH',
-                    '', '', '', '', '', '', '',
-                    (invoice.total / 100).toFixed(2), 'CHF',
-                    'S', invoice.customer?.name || 'Customer',
-                    invoice.customer?.address || 'Address', '',
-                    invoice.customer?.zip || '0000',
-                    invoice.customer?.city || 'City',
-                    invoice.customer?.country || 'CH',
-                    'QRR', qrReference, `Invoice ${invoice.number}`, 'EPD'
-                ].join('\n');
-                const qrCodeImage = await QRCode.toDataURL(qrPayload, {
-                    type: 'image/png',
-                    width: 140,
-                    margin: 1,
-                    color: { dark: '#000000', light: '#FFFFFF' }
-                });
-                const pdfContent = `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <title>Invoice ${invoice.number}</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 0; padding: 20px; font-size: 12px; color: #333; }
-              .header { display: flex; justify-content: space-between; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #e5e5e5; }
-              .company-info { flex: 1; }
-              .logo { width: 100px; height: 100px; background: transparent; display: flex; align-items: center; justify-content: center; padding: 5px; }
-              .invoice-title { font-size: 24px; font-weight: bold; color: #2563eb; margin: 20px 0; }
-              .invoice-details { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-bottom: 30px; }
-              .items-table { width: 100%; border-collapse: collapse; margin: 30px 0; }
-              .items-table th, .items-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-              .items-table th { background-color: #f8f9fa; font-weight: bold; }
-              .totals { margin-top: 20px; text-align: right; }
-              .totals table { margin-left: auto; border-collapse: collapse; }
-              .totals td { padding: 5px 15px; border-bottom: 1px solid #eee; }
-              .totals .total-row { font-weight: bold; font-size: 14px; border-top: 2px solid #333; }
-            </style>
-          </head>
-          <body>
-            <div class="header">
-              <div class="company-info">
-                <h1>${company.name}</h1>
-                <div>${company.address}</div>
-                <div>${company.zip} ${company.city}</div>
-                <div>Schweiz</div>
-                <br>
-                <div>E-Mail: ${company.email}</div>
-                ${company.phone ? `<div>Tel: ${company.phone}</div>` : ''}
-                ${company.uid ? `<div>UID: ${company.uid}</div>` : ''}
-                ${company.vat_number ? `<div>MWST-Nr: ${company.vat_number}</div>` : ''}
-                ${company.iban ? `<div>IBAN: ${company.iban}</div>` : ''}
-              </div>
-              <div class="logo">
-                ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 100px; max-height: 100px; width: 100px; height: 100px; object-fit: contain; display: block;">` : ''}
-              </div>
-            </div>
-
-            <div class="invoice-title">Rechnung ${invoice.number}</div>
-
-            <div class="invoice-details">
-              <div>
-                <h3>Rechnungsadresse:</h3>
-                <div><strong>${invoice.customer?.name || 'Customer'}</strong></div>
-                ${invoice.customer?.company ? `<div>${invoice.customer.company}</div>` : ''}
-                <div>${invoice.customer?.address || 'Address'}</div>
-                <div>${invoice.customer?.zip || '0000'} ${invoice.customer?.city || 'City'}</div>
-                <div>${invoice.customer?.country || 'CH'}</div>
-              </div>
-              <div>
-                <table>
-                  <tr><td><strong>Rechnungsnummer:</strong></td><td>${invoice.number}</td></tr>
-                  <tr><td><strong>Rechnungsdatum:</strong></td><td>${new Date(invoice.date).toLocaleDateString('de-CH')}</td></tr>
-                  <tr><td><strong>Fälligkeitsdatum:</strong></td><td>${new Date(invoice.dueDate).toLocaleDateString('de-CH')}</td></tr>
-                  <tr><td><strong>QR-Referenz:</strong></td><td>${invoice.qrReference}</td></tr>
-                </table>
-              </div>
-            </div>
-
-            <table class="items-table">
-              <thead>
-                <tr>
-                  <th>Pos.</th>
-                  <th>Beschreibung</th>
-                  <th>Menge</th>
-                  <th>Einheit</th>
-                  <th>Preis (CHF)</th>
-                  <th>Betrag (CHF)</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${invoice.items?.map((item, index) => `
-                  <tr>
-                    <td>${index + 1}</td>
-                    <td>${item.description}</td>
-                    <td>${item.quantity.toFixed(3)}</td>
-                    <td>${item.unit}</td>
-                    <td>${(item.unitPrice / 100).toFixed(2)}</td>
-                    <td>${(item.lineTotal / 100).toFixed(2)}</td>
-                  </tr>
-                `).join('') || '<tr><td colspan="6">No items</td></tr>'}
-              </tbody>
-            </table>
-
-            <div class="totals">
-              <table>
-                <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
-                <tr><td>MWST:</td><td>CHF ${(invoice.vatAmount / 100).toFixed(2)}</td></tr>
-                <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
-              </table>
-            </div>
-
-            <div style="margin-top: 40px; text-align: center;">
-              <img src="${qrCodeImage}" alt="Swiss QR Code" style="width: 140px; height: 140px;" />
-              <div style="margin-top: 10px; font-size: 10px;">Swiss QR Code</div>
-            </div>
-          </body>
-          </html>
-        `;
-                const htmlPdf = require('html-pdf-node');
-                const options = {
-                    format: 'A4',
-                    margin: { top: '20mm', bottom: '20mm', left: '20mm', right: '20mm' },
-                    printBackground: true,
-                    displayHeaderFooter: false,
-                    timeout: 10000
-                };
-                const file = { content: pdfContent };
-                const pdfBuffer = await htmlPdf.generatePdf(file, options);
-                const sanitizeForPath = (name) => {
-                    return name.replace(/[^a-zA-Z0-9-_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
-                };
-                const companyName = sanitizeForPath(company.name || 'Company');
-                const customerName = sanitizeForPath(invoice.customer?.name || 'Customer');
-                const invoiceNumber = sanitizeForPath(invoice.number);
-                const fileName = `Invoice-${invoice.number}.pdf`;
-                const filePath = `${companyName}/${customerName}/${invoiceNumber}/${fileName}`;
-                const { data: uploadData, error: uploadError } = await supabase_1.supabaseAdmin.storage
-                    .from('invoices')
-                    .upload(filePath, pdfBuffer, {
-                    contentType: 'application/pdf',
-                    upsert: false
-                });
-                if (uploadError) {
-                    console.error('❌ Failed to upload PDF to storage:', uploadError);
-                }
-                else {
-                    console.log('✅ PDF uploaded successfully:', uploadData.path);
-                    const fileInfo = {
-                        id: crypto.randomUUID(),
-                        fileName: fileName,
-                        filePath: uploadData.path,
-                        fileType: 'invoice_pdf',
-                        uploadedAt: new Date().toISOString()
-                    };
-                    const currentNotes = completeInvoice.internal_notes || '{}';
-                    let notesData = {};
-                    try {
-                        if (currentNotes && currentNotes.trim() !== '' && currentNotes.trim().startsWith('{')) {
-                            notesData = JSON.parse(currentNotes);
-                        }
-                    }
-                    catch (e) {
-                        notesData = {
-                            _oldNotes: currentNotes,
-                            files: []
-                        };
-                    }
-                    if (!notesData.files) {
-                        notesData.files = [];
-                    }
-                    notesData.files.push(fileInfo);
-                    await supabase_1.db.invoices()
-                        .update({
-                        internal_notes: JSON.stringify(notesData)
-                    })
-                        .eq('id', newInvoice.id);
-                    console.log('📄 PDF file record stored in invoice:', fileInfo);
-                }
+            if (companyForPdf && completeInvoice.customers) {
+                await generateAndSaveInvoicePdf(completeInvoice, companyForPdf, completeInvoice.customers);
             }
         }
         catch (pdfError) {
-            console.error('❌ Error generating PDF:', pdfError);
+            console.error('❌ Error generating PDF on invoice creation:', pdfError);
         }
         try {
             await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'INVOICE_CREATED', 'INVOICE', invoice.id, {
@@ -698,6 +698,44 @@ exports.updateInvoiceStatus = (0, errorHandler_1.asyncHandler)(async (req, res) 
                 error: 'Invoice not found'
             });
             return;
+        }
+        if (status === 'OPEN') {
+            try {
+                const { data: fullInvoice, error: fetchError } = await supabase_1.db.invoices()
+                    .select(`*, customers (*), companies (*), invoice_items (*)`)
+                    .eq('id', invoiceId)
+                    .eq('company_id', companyId)
+                    .single();
+                if (!fetchError && fullInvoice && fullInvoice.customers && fullInvoice.companies) {
+                    await generateAndSaveInvoicePdf(fullInvoice, fullInvoice.companies, fullInvoice.customers);
+                    if (fullInvoice.customers.email) {
+                        const emailService = emailService_1.EmailService.getInstance();
+                        const result = await emailService.sendInvoiceNotification({
+                            invoice: fullInvoice,
+                            customer: fullInvoice.customers,
+                            company: fullInvoice.companies
+                        });
+                        if (result?.success) {
+                            await supabase_1.db.invoices()
+                                .update({
+                                sent_at: new Date().toISOString(),
+                                email_sent_count: (data.email_sent_count || 0) + 1
+                            })
+                                .eq('id', invoiceId)
+                                .eq('company_id', companyId);
+                        }
+                        else {
+                            console.warn('Email send failed on status OPEN:', result?.error);
+                        }
+                    }
+                }
+                else {
+                    console.warn('Invoice/customer/company data not ready for PDF generation and email on OPEN', fetchError);
+                }
+            }
+            catch (error) {
+                console.error('Error generating PDF and sending email on status OPEN:', error);
+            }
         }
         try {
             await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'INVOICE_STATUS_UPDATED', 'INVOICE', invoiceId, {
@@ -800,11 +838,12 @@ exports.generateInvoiceQR = (0, errorHandler_1.asyncHandler)(async (req, res) =>
             });
             return;
         }
+        const { referenceType, iban } = getReferenceTypeAndIban(invoice.qr_reference, company);
         const qrData = {
             qrType: 'SPC',
             version: '0200',
             codingType: '1',
-            iban: company.iban || company.qr_iban || 'CH2109000000100015000.6',
+            iban: iban,
             creditor: {
                 addressType: 'S',
                 name: company.name,
@@ -814,7 +853,7 @@ exports.generateInvoiceQR = (0, errorHandler_1.asyncHandler)(async (req, res) =>
                 town: company.city,
                 country: company.country || 'CH'
             },
-            amount: invoice.total.toFixed(2),
+            amount: (invoice.total / 100).toFixed(2),
             currency: 'CHF',
             debtor: {
                 addressType: 'S',
@@ -825,7 +864,7 @@ exports.generateInvoiceQR = (0, errorHandler_1.asyncHandler)(async (req, res) =>
                 town: invoice.customers.city,
                 country: invoice.customers.country || 'CH'
             },
-            referenceType: 'QRR',
+            referenceType: referenceType,
             reference: invoice.qr_reference,
             unstructuredMessage: `Invoice ${invoice.number}`,
             trailer: 'EPD',
@@ -836,7 +875,7 @@ exports.generateInvoiceQR = (0, errorHandler_1.asyncHandler)(async (req, res) =>
                 'SPC',
                 '0200',
                 '1',
-                company.iban || 'CH2109000000100015000.6',
+                iban,
                 'S',
                 company.name,
                 company.address,
@@ -854,7 +893,7 @@ exports.generateInvoiceQR = (0, errorHandler_1.asyncHandler)(async (req, res) =>
                 invoice.customers.zip,
                 invoice.customers.city,
                 invoice.customers.country || 'CH',
-                'QRR',
+                referenceType,
                 invoice.qr_reference,
                 `Invoice ${invoice.number}`,
                 'EPD'
@@ -957,13 +996,14 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
         else {
             console.log('ℹ️ No logo_url found in company data');
         }
+        const { referenceType, iban } = getReferenceTypeAndIban(invoice.qr_reference, company);
         const QRCode = require('qrcode');
-        const qrReference = invoice.qr_reference;
+        const paymentReference = invoice.qr_reference;
         const qrPayload = [
             'SPC',
             '0200',
             '1',
-            company.iban || 'CH2109000000100015000.6',
+            iban,
             'S',
             company.name,
             company.address,
@@ -981,8 +1021,8 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
             invoice.customers.zip,
             invoice.customers.city,
             invoice.customers.country || 'CH',
-            'QRR',
-            qrReference,
+            referenceType,
+            paymentReference,
             `Invoice ${invoice.number}`,
             'EPD'
         ].join('\n');
@@ -996,323 +1036,51 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
             }
         });
         console.log('QR code generated for invoice:', invoice.number);
-        const htmlTemplate = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>Invoice ${invoice.number}</title>
-      <style>
-        body { 
-          font-family: Arial, sans-serif; 
-          margin: 0; 
-          padding: 20px; 
-          font-size: 12px;
-          color: #333;
-        }
-        .header { 
-          display: flex; 
-          justify-content: space-between; 
-          align-items: start;
-          margin-bottom: 40px;
-          padding-bottom: 20px;
-          border-bottom: 2px solid #e5e5e5;
-        }
-        .company-info { flex: 1; }
-        .logo { width: 150px; height: 80px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; }
-        .invoice-title { 
-          font-size: 24px; 
-          font-weight: bold; 
-          color: #2563eb;
-          margin: 20px 0;
-        }
-        .invoice-details {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 40px;
-          margin-bottom: 30px;
-        }
-        .customer-info { }
-        .invoice-meta { text-align: right; }
-        .items-table { 
-          width: 100%; 
-          border-collapse: collapse; 
-          margin: 30px 0;
-        }
-        .items-table th, .items-table td { 
-          border: 1px solid #ddd; 
-          padding: 8px; 
-          text-align: left;
-        }
-        .items-table th { 
-          background-color: #f8f9fa; 
-          font-weight: bold;
-        }
-        .items-table .number { text-align: right; }
-        .totals { 
-          margin-top: 20px;
-          text-align: right;
-        }
-        .totals table {
-          margin-left: auto;
-          border-collapse: collapse;
-        }
-        .totals td {
-          padding: 5px 15px;
-          border-bottom: 1px solid #eee;
-        }
-        .totals .total-row {
-          font-weight: bold;
-          font-size: 14px;
-          border-top: 2px solid #333;
-        }
-        .payment-info {
-          margin-top: 40px;
-          padding: 20px;
-          background-color: #f8f9fa;
-          border: 1px solid #ddd;
-        }
-        .qr-section {
-          margin-top: 30px;
-          padding: 20px;
-          border: 2px solid #000;
-          display: flex;
-          gap: 20px;
-        }
-        .qr-code {
-          width: 140px;
-          height: 140px;
-          border: 1px solid #000;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: white;
-          font-size: 10px;
-        }
-        .qr-info { flex: 1; }
-        .swiss-cross {
-          color: red;
-          font-weight: bold;
-          font-size: 16px;
-        }
-      </style>
-    </head>
-    <body>
-      <!-- Header with Company Info and Logo -->
-      <div class="header">
-        <div class="company-info">
-          <h1>${company.name}</h1>
-          <div>${company.address}</div>
-          <div>${company.zip} ${company.city}</div>
-          <div>Schweiz</div>
-          <br>
-          <div>E-Mail: ${company.email}</div>
-          ${company.phone ? `<div>Tel: ${company.phone}</div>` : ''}
-          ${company.uid ? `<div>UID: ${company.uid}</div>` : ''}
-          ${company.vat_number ? `<div>MWST-Nr: ${company.vat_number}</div>` : ''}
-          ${company.iban ? `<div>IBAN: ${company.iban}</div>` : ''}
-        </div>
-        <div class="logo">
-          ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 220px; max-height: 150px; width: auto; height: auto; object-fit: contain; display: block;">` : ''}
-        </div>
-      </div>
-
-      <!-- Invoice Title -->
-      <div class="invoice-title">Rechnung ${invoice.number}</div>
-
-      <!-- Invoice Details -->
-      <div class="invoice-details">
-        <div class="customer-info">
-          <h3>Rechnungsadresse:</h3>
-          <div><strong>${invoice.customers.name}</strong></div>
-          ${invoice.customers.company ? `<div>${invoice.customers.company}</div>` : ''}
-          <div>${invoice.customers.address}</div>
-          <div>${invoice.customers.zip} ${invoice.customers.city}</div>
-          <div>${invoice.customers.country === 'CH' ? 'Schweiz' : invoice.customers.country}</div>
-          ${invoice.customers.email ? `<br><div>E-Mail: ${invoice.customers.email}</div>` : ''}
-          ${invoice.customers.phone ? `<div>Tel: ${invoice.customers.phone}</div>` : ''}
-          ${invoice.customers.uid ? `<div>UID: ${invoice.customers.uid}</div>` : ''}
-        </div>
-        <div class="invoice-meta">
-          <table>
-            <tr><td><strong>Rechnungsnummer:</strong></td><td>${invoice.number}</td></tr>
-            <tr><td><strong>Rechnungsdatum:</strong></td><td>${new Date(invoice.date).toLocaleDateString('de-CH')}</td></tr>
-            <tr><td><strong>Fälligkeitsdatum:</strong></td><td>${new Date(invoice.due_date).toLocaleDateString('de-CH')}</td></tr>
-            <tr><td><strong>Zahlungsfrist:</strong></td><td>${invoice.customers.payment_terms || 30} Tage</td></tr>
-            <tr><td><strong>QR-Referenz:</strong></td><td>${invoice.qr_reference}</td></tr>
-          </table>
-        </div>
-      </div>
-
-      <!-- Invoice Items -->
-      <table class="items-table">
-        <thead>
-          <tr>
-            <th>Pos.</th>
-            <th>Beschreibung</th>
-            <th>Menge</th>
-            <th>Einheit</th>
-            <th>Preis (CHF)</th>
-            <th>Rabatt (%)</th>
-            <th>MWST (%)</th>
-            <th>Betrag (CHF)</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${invoice.invoice_items?.map((item, index) => `
-            <tr>
-              <td>${index + 1}</td>
-              <td>${item.description}</td>
-              <td class="number">${(item.quantity / 1000).toFixed(3)}</td>
-              <td>${item.unit}</td>
-              <td class="number">${(item.unit_price / 100).toFixed(2)}</td>
-              <td class="number">${(item.discount / 100).toFixed(1)}%</td>
-              <td class="number">${(item.vat_rate / 100).toFixed(1)}%</td>
-              <td class="number">${(item.line_total / 100).toFixed(2)}</td>
-            </tr>
-          `).join('') || '<tr><td colspan="8">No items</td></tr>'}
-        </tbody>
-      </table>
-
-      <!-- Totals -->
-      <div class="totals">
-        <table>
-          <tr><td>Zwischensumme:</td><td>CHF ${(invoice.subtotal / 100).toFixed(2)}</td></tr>
-          ${invoice.discount_amount > 0 ? `<tr><td>Rabatt:</td><td>CHF -${(invoice.discount_amount / 100).toFixed(2)}</td></tr>` : ''}
-          <tr><td>MWST:</td><td>CHF ${(invoice.vat_amount / 100).toFixed(2)}</td></tr>
-          <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${(invoice.total / 100).toFixed(2)}</strong></td></tr>
-        </table>
-      </div>
-
-      <!-- Payment Information -->
-      <div class="payment-info">
-        <h3>Zahlungsinformationen</h3>
-        <p><strong>Zahlbar bis:</strong> ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</p>
-        <p><strong>Referenz:</strong> ${invoice.qr_reference}</p>
-        <p>Bitte verwenden Sie den beigefügten QR-Code für die Zahlung oder überweisen Sie den Betrag unter Angabe der Referenznummer.</p>
-      </div>
-
-      <!-- Page Break Before QR Section -->
-      <div style="page-break-before: always;"></div>
-      
-      <!-- Swiss QR-Invoice Payment Slip (Separate Page) -->
-      <div style="width: 210mm; height: 297mm; position: relative; margin: 0; padding: 0;">
-        
-        <!-- QR-Invoice Header -->
-        <div style="text-align: center; margin: 20mm 0 10mm 0; font-size: 16px; font-weight: bold;">
-          Zahlteil / Section paiement / Sezione pagamento
-        </div>
-        
-        <!-- Main QR Payment Section -->
-        <div style="display: flex; height: 105mm; border: 1px solid #000;">
-          
-          <!-- Receipt Section (Left) -->
-          <div style="width: 62mm; padding: 5mm; border-right: 1px solid #000; font-size: 8pt;">
-            <div style="font-weight: bold; margin-bottom: 5mm;">Empfangsschein</div>
-            
-            <div style="margin-bottom: 3mm;">
-              <div style="font-weight: bold; font-size: 6pt;">Konto / Payable to</div>
-              <div>${company.iban || 'CH21 0900 0000 1001 5000 6'}</div>
-              <div>${company.name}</div>
-              <div>${company.address}</div>
-              <div>${company.zip} ${company.city}</div>
-            </div>
-            
-            <div style="margin-bottom: 3mm;">
-              <div style="font-weight: bold; font-size: 6pt;">Referenz</div>
-              <div style="font-size: 8pt;">${qrReference}</div>
-            </div>
-            
-            <div style="margin-bottom: 3mm;">
-              <div style="font-weight: bold; font-size: 6pt;">Zahlbar durch</div>
-              <div>${invoice.customers.name}</div>
-              ${invoice.customers.company ? `<div>${invoice.customers.company}</div>` : ''}
-              <div>${invoice.customers.address}</div>
-              <div>${invoice.customers.zip} ${invoice.customers.city}</div>
-            </div>
-            
-            <div style="position: absolute; bottom: 5mm; left: 5mm;">
-              <div style="font-weight: bold; font-size: 6pt;">Währung</div>
-              <div>CHF</div>
-            </div>
-            
-            <div style="position: absolute; bottom: 5mm; left: 20mm;">
-              <div style="font-weight: bold; font-size: 6pt;">Betrag</div>
-              <div style="font-weight: bold;">${(invoice.total / 100).toFixed(2)}</div>
-            </div>
-            
-            <div style="position: absolute; bottom: 15mm; right: 5mm; font-size: 6pt;">
-              Annahmestelle
-            </div>
-          </div>
-          
-          <!-- Payment Section (Right) -->
-          <div style="flex: 1; padding: 5mm; position: relative;">
-            <div style="font-weight: bold; margin-bottom: 5mm;">Zahlteil</div>
-            
-            <!-- QR Code -->
-            <div style="position: absolute; top: 5mm; right: 5mm;">
-              <img src="${qrCodeImage}" alt="Swiss QR Code" style="width: 46mm; height: 46mm;" />
-              <div style="text-align: center; margin-top: 2mm; font-size: 6pt;">
-                🇨🇭 Swiss QR Code
-              </div>
-            </div>
-            
-            <!-- Payment Information -->
-            <div style="width: 55mm;">
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Währung</div>
-                <div>CHF</div>
-              </div>
-              
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Betrag</div>
-                <div style="font-weight: bold; font-size: 10pt;">${(invoice.total / 100).toFixed(2)}</div>
-              </div>
-              
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Konto / Payable to</div>
-                <div>${company.iban || 'CH21 0900 0000 1001 5000 6'}</div>
-                <div>${company.name}</div>
-                <div>${company.address}</div>
-                <div>${company.zip} ${company.city}</div>
-              </div>
-              
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Referenz</div>
-                <div style="font-size: 8pt; word-break: break-all;">${qrReference}</div>
-              </div>
-              
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Zusätzliche Informationen</div>
-                <div style="font-size: 8pt;">Rechnung ${invoice.number}</div>
-                <div style="font-size: 8pt;">Fällig: ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</div>
-              </div>
-              
-              <div>
-                <div style="font-weight: bold; font-size: 6pt;">Zahlbar durch</div>
-                <div>${invoice.customers.name}</div>
-                ${invoice.customers.company ? `<div>${invoice.customers.company}</div>` : ''}
-                <div>${invoice.customers.address}</div>
-                <div>${invoice.customers.zip} ${invoice.customers.city}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Perforated Line -->
-        <div style="margin: 5mm 0; border-top: 1px dashed #000; text-align: center; font-size: 6pt; color: #666;">
-          ✂️ Hier abtrennen / Détacher ici / Staccare qui
-        </div>
-        
-      </div>
-
-      <div style="margin-top: 30px; text-align: center; font-size: 10px; color: #666;">
-        Generiert am ${new Date().toLocaleDateString('de-CH')} um ${new Date().toLocaleTimeString('de-CH')}
-      </div>
-    </body>
-    </html>
-    `;
+        const templateLanguage = (invoice.customers.language || company.default_language || 'de').toLowerCase();
+        const htmlTemplate = (0, pdfTemplates_1.generateUnifiedInvoicePdfTemplate)({
+            invoice: {
+                number: invoice.number,
+                date: invoice.date,
+                due_date: invoice.due_date,
+                service_date: invoice.service_date,
+                qr_reference: invoice.qr_reference,
+                subtotal: invoice.subtotal,
+                discount_amount: invoice.discount_amount,
+                vat_amount: invoice.vat_amount,
+                total: invoice.total,
+                invoice_items: invoice.invoice_items || []
+            },
+            customer: {
+                name: invoice.customers.name,
+                company: invoice.customers.company,
+                address: invoice.customers.address,
+                zip: invoice.customers.zip,
+                city: invoice.customers.city,
+                country: invoice.customers.country,
+                email: invoice.customers.email,
+                phone: invoice.customers.phone,
+                payment_terms: invoice.customers.payment_terms
+            },
+            company: {
+                name: company.name,
+                address: company.address,
+                zip: company.zip,
+                city: company.city,
+                email: company.email,
+                phone: company.phone,
+                uid: company.uid,
+                vat_number: company.vat_number,
+                iban: company.iban,
+                qr_iban: company.qr_iban,
+                website: company.website
+            },
+            qrCodeImage,
+            logoBase64,
+            paymentReference,
+            referenceType,
+            iban,
+            language: templateLanguage
+        });
         try {
             const htmlPdf = require('html-pdf-node');
             console.log('Starting PDF generation for invoice:', invoice.number);
@@ -1326,23 +1094,16 @@ exports.generateInvoicePdf = (0, errorHandler_1.asyncHandler)(async (req, res) =
                 },
                 printBackground: true,
                 displayHeaderFooter: false,
-                timeout: 5000,
+                timeout: 30000,
+                preferCSSPageSize: true,
+                emulateMedia: 'print',
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor',
-                    '--run-all-compositor-stages-before-draw',
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-renderer-backgrounding'
-                ],
-                waitForSelector: 'body',
-                omitBackground: false,
-                preferCSSPageSize: true,
-                emulateMedia: 'print'
+                    '--run-all-compositor-stages-before-draw'
+                ]
             };
             const file = { content: htmlTemplate };
             console.log('Generating PDF with html-pdf-node...');
@@ -1468,390 +1229,149 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
         let pdfFilePath = null;
         let pdfBuffer = null;
         try {
-            const htmlPdf = require('html-pdf-node');
-            const daysSinceDue = Math.floor((new Date().getTime() - new Date(invoice.due_date).getTime()) / (1000 * 60 * 60 * 24));
-            const totalAmountCHF = invoice.total / 100;
-            const paidAmountCHF = (invoice.paid_amount || 0) / 100;
-            const remainingAmountCHF = totalAmountCHF - paidAmountCHF;
-            const paymentProgress = totalAmountCHF > 0 ? (paidAmountCHF / totalAmountCHF) * 100 : 0;
-            const reminderTemplates = {
-                1: {
-                    title: '1. Mahnung',
-                    body: `Das Fälligkeitsdatum ist bereits überschritten, und wir haben noch keine vollständige Zahlung erhalten. Wir bitten Sie höflich, den offenen Betrag innerhalb der nächsten 10 Tage zu begleichen.`
-                },
-                2: {
-                    title: '2. Mahnung',
-                    body: `Trotz unserer ersten Mahnung ist die nachstehende Rechnung noch immer nicht vollständig beglichen. Wir bitten Sie dringend, den Betrag innerhalb von 5 Tagen zu begleichen.`
-                },
-                3: {
-                    title: '3. und letzte Mahnung',
-                    body: `Dies ist unsere letzte Mahnung für die nachstehende Rechnung. Sollte der offene Betrag nicht innerhalb von 3 Tagen beglichen werden, werden wir ohne weitere Vorankündigung rechtliche Schritte einleiten.`
+            console.log(`🎨 Generating professional reminder PDF (Level ${level}) for invoice: ${invoice.number}`);
+            let logoBase64 = null;
+            if (company.logo_url) {
+                try {
+                    let logoPath = null;
+                    if (company.logo_url.includes('/storage/v1/object/public/logos/')) {
+                        logoPath = company.logo_url.split('/storage/v1/object/public/logos/')[1].split('?')[0];
+                    }
+                    else if (company.logo_url.includes('/logos/')) {
+                        logoPath = company.logo_url.split('/logos/')[1].split('?')[0];
+                    }
+                    else if (company.logo_url.startsWith('logos/')) {
+                        logoPath = company.logo_url.replace('logos/', '').split('?')[0];
+                    }
+                    else {
+                        logoPath = company.logo_url.split('?')[0];
+                    }
+                    if (logoPath) {
+                        const { data: logoData, error: logoError } = await supabase_1.supabaseAdmin.storage
+                            .from('logos')
+                            .download(logoPath);
+                        if (logoError) {
+                            console.error('❌ Error downloading logo for reminder:', logoError);
+                        }
+                        else if (logoData) {
+                            const logoBuffer = Buffer.from(await logoData.arrayBuffer());
+                            const logoMimeType = logoData.type || 'image/png';
+                            logoBase64 = `data:${logoMimeType};base64,${logoBuffer.toString('base64')}`;
+                            console.log('✅ Logo converted to base64 for reminder');
+                        }
+                    }
                 }
-            };
-            const template = reminderTemplates[level];
+                catch (logoFetchError) {
+                    console.error('❌ Error fetching logo for reminder:', logoFetchError);
+                }
+            }
+            const reminderFees = { 1: 0, 2: 20.00, 3: 50.00 };
+            const reminderFee = reminderFees[level];
+            const daysOverdue = Math.floor((new Date().getTime() - new Date(invoice.due_date).getTime()) / (1000 * 60 * 60 * 24));
+            const { referenceType, iban } = getReferenceTypeAndIban(invoice.qr_reference, company);
+            const remainingAmount = invoice.total - (invoice.paid_amount || 0);
+            const totalWithFee = remainingAmount + (reminderFee * 100);
             const QRCode = require('qrcode');
             const qrPayload = [
                 'SPC',
                 '0200',
                 '1',
-                company.iban || 'CH2109000000100015000.6',
-                'S',
-                company.name,
-                company.address,
-                '',
-                company.zip,
-                company.city,
-                'CH',
+                iban || '',
+                'K',
+                company.name || '',
+                company.address || '',
+                company.zip || '',
+                company.city || '',
+                company.country || 'CH',
                 '', '', '', '', '', '', '',
-                remainingAmountCHF.toFixed(2),
+                (totalWithFee / 100).toFixed(2),
                 'CHF',
-                'S',
-                invoice.customers.name,
+                'K',
+                invoice.customers.name || '',
                 invoice.customers.address || '',
-                '',
-                invoice.customers.zip || '0000',
+                invoice.customers.zip || '',
                 invoice.customers.city || '',
                 invoice.customers.country || 'CH',
-                'QRR',
-                invoice.qr_reference,
-                `Invoice ${invoice.number} - ${template.title}`,
+                '', '', '', '', '', '', '',
+                referenceType,
+                invoice.qr_reference || '',
+                `Mahnung ${level} - Rechnung ${invoice.number}`,
                 'EPD'
-            ].join('\n');
+            ].join('\r\n');
             const qrCodeImage = await QRCode.toDataURL(qrPayload, {
+                errorCorrectionLevel: 'M',
                 type: 'image/png',
-                width: 140,
-                margin: 1,
-                color: { dark: '#000000', light: '#FFFFFF' }
+                width: 300,
+                margin: 1
             });
-            const htmlTemplate = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="UTF-8">
-        <title>${template.title} - ${invoice.number}</title>
-        <style>
-          @page {
-            size: A4;
-            margin: 20mm;
-          }
-          body { 
-            font-family: Arial, sans-serif; 
-            margin: 0; 
-            padding: 0; 
-            font-size: 12px;
-            line-height: 1.4;
-            color: #333;
-          }
-          .page-break {
-            page-break-before: always;
-          }
-          .no-break {
-            page-break-inside: avoid;
-          }
-          .header { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: start;
-            margin-bottom: 30px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #e5e5e5;
-            page-break-inside: avoid;
-          }
-          .reminder-title { 
-            font-size: 20px; 
-            font-weight: bold; 
-            color: #2563eb;
-            margin: 20px 0 15px 0;
-            text-align: center;
-            text-transform: uppercase;
-            page-break-inside: avoid;
-          }
-          .customer-address {
-            margin: 30px 0;
-            line-height: 1.3;
-          }
-          .reminder-content {
-            margin: 25px 0;
-            line-height: 1.6;
-            page-break-inside: avoid;
-          }
-          .invoice-details {
-            margin: 25px 0;
-            padding: 15px;
-            background-color: #f8f9fa;
-            border: 1px solid #ddd;
-            border-left: 4px solid #2563eb;
-            page-break-inside: avoid;
-          }
-          .payment-progress {
-            margin: 25px 0;
-            padding: 15px;
-            background-color: #f0f9ff;
-            border: 1px solid #0ea5e9;
-            border-radius: 8px;
-            page-break-inside: avoid;
-          }
-          .progress-bar-container {
-            width: 100%;
-            height: 30px;
-            background-color: #e5e7eb;
-            border-radius: 15px;
-            overflow: hidden;
-            margin: 15px 0;
-            position: relative;
-          }
-          .progress-bar-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #10b981 0%, #059669 100%);
-            border-radius: 15px;
-            transition: width 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            font-size: 12px;
-          }
-          .progress-info {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 10px;
-            font-size: 11px;
-            color: #6b7280;
-          }
-          .payment-info {
-            margin: 25px 0;
-            padding: 15px;
-            background-color: #f8f9fa;
-            border: 1px solid #ddd;
-            page-break-inside: avoid;
-          }
-        </style>
-      </head>
-      <body>
-        <!-- Header -->
-        <div class="header">
-          <div>
-            <h1>${company.name}</h1>
-            <div>${company.address}</div>
-            <div>${company.zip} ${company.city}</div>
-            <div>Schweiz</div>
-          </div>
-        </div>
-
-        <!-- Customer Address -->
-        <div class="customer-address">
-          <strong>${invoice.customers.name}</strong><br>
-          ${invoice.customers.company ? `${invoice.customers.company}<br>` : ''}
-          ${invoice.customers.address}<br>
-          ${invoice.customers.zip} ${invoice.customers.city}
-        </div>
-
-        <!-- Date -->
-        <div style="text-align: right; margin: 20px 0;">
-          ${company.city}, ${new Date().toLocaleDateString('de-CH')}
-        </div>
-
-        <!-- Reminder Title -->
-        <div class="reminder-title">${template.title}</div>
-
-        <!-- Reminder Content -->
-        <div class="reminder-content">
-          <p>Sehr geehrte Damen und Herren,</p>
-          <p>${template.body}</p>
-          <p>Sollten Sie die Zahlung bereits veranlasst haben, betrachten Sie dieses Schreiben als gegenstandslos.</p>
-        </div>
-
-        <!-- Invoice Details -->
-        <div class="invoice-details">
-          <h3 style="margin-top: 0;">Rechnungsdetails</h3>
-          <table style="width: 100%; border-collapse: collapse;">
-            <tr>
-              <td style="padding: 8px 0;"><strong>Rechnungsnummer:</strong></td>
-              <td style="padding: 8px 0;">${invoice.number}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0;"><strong>Rechnungsdatum:</strong></td>
-              <td style="padding: 8px 0;">${new Date(invoice.date).toLocaleDateString('de-CH')}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0;"><strong>Fälligkeitsdatum:</strong></td>
-              <td style="padding: 8px 0;">${new Date(invoice.due_date).toLocaleDateString('de-CH')}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0;"><strong>Tage überfällig:</strong></td>
-              <td style="padding: 8px 0; color: red; font-weight: bold;">${daysSinceDue} Tage</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0;"><strong>Rechnungsbetrag:</strong></td>
-              <td style="padding: 8px 0; font-weight: bold;">CHF ${totalAmountCHF.toFixed(2)}</td>
-            </tr>
-          </table>
-        </div>
-
-        <!-- Payment Progress -->
-        <div class="payment-progress">
-          <h3 style="margin-top: 0;">Zahlungsstatus</h3>
-          <div class="progress-bar-container">
-            <div class="progress-bar-fill" style="width: ${Math.min(paymentProgress, 100)}%;">
-              ${paymentProgress.toFixed(1)}%
-            </div>
-          </div>
-          <div class="progress-info">
-            <span>Bezahlt: <strong>CHF ${paidAmountCHF.toFixed(2)}</strong></span>
-            <span>Offen: <strong>CHF ${remainingAmountCHF.toFixed(2)}</strong></span>
-          </div>
-          <div style="margin-top: 15px; text-align: center; font-weight: bold; color: #dc2626;">
-            Offener Betrag: CHF ${remainingAmountCHF.toFixed(2)}
-          </div>
-        </div>
-
-        <!-- Payment Information -->
-        <div class="payment-info">
-          <h3>Zahlungsinformationen</h3>
-          <p><strong>Zahlbar bis:</strong> ${new Date(Date.now() + (level === 3 ? 3 : level === 2 ? 5 : 10) * 24 * 60 * 60 * 1000).toLocaleDateString('de-CH')}</p>
-          <p><strong>Referenz:</strong> ${invoice.qr_reference}</p>
-          <p>Bitte verwenden Sie den beigefügten QR-Code für die Zahlung oder überweisen Sie den Betrag unter Angabe der Referenznummer.</p>
-        </div>
-
-        <!-- Page Break Before QR Section -->
-        <div style="page-break-before: always;"></div>
-        
-        <!-- Swiss QR-Invoice Payment Slip (Separate Page) -->
-        <div style="width: 210mm; height: 297mm; position: relative; margin: 0; padding: 0;">
-          
-          <!-- QR-Invoice Header -->
-          <div style="text-align: center; margin: 20mm 0 10mm 0; font-size: 16px; font-weight: bold;">
-            Zahlteil / Section paiement / Sezione pagamento
-          </div>
-          
-          <!-- Main QR Payment Section -->
-          <div style="display: flex; height: 105mm; border: 1px solid #000;">
-            
-            <!-- Receipt Section (Left) -->
-            <div style="width: 62mm; padding: 5mm; border-right: 1px solid #000; font-size: 8pt; position: relative;">
-              <div style="font-weight: bold; margin-bottom: 5mm;">Empfangsschein</div>
-              
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Konto / Payable to</div>
-                <div>${company.iban || 'CH21 0900 0000 1001 5000 6'}</div>
-                <div>${company.name}</div>
-                <div>${company.address}</div>
-                <div>${company.zip} ${company.city}</div>
-              </div>
-              
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Referenz</div>
-                <div style="font-size: 8pt;">${invoice.qr_reference}</div>
-              </div>
-              
-              <div style="margin-bottom: 3mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Zahlbar durch</div>
-                <div>${invoice.customers.name}</div>
-                ${invoice.customers.company ? `<div>${invoice.customers.company}</div>` : ''}
-                <div>${invoice.customers.address}</div>
-                <div>${invoice.customers.zip} ${invoice.customers.city}</div>
-              </div>
-              
-              <div style="position: absolute; bottom: 5mm; left: 5mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Währung</div>
-                <div>CHF</div>
-              </div>
-              
-              <div style="position: absolute; bottom: 5mm; left: 20mm;">
-                <div style="font-weight: bold; font-size: 6pt;">Betrag</div>
-                <div style="font-weight: bold;">${remainingAmountCHF.toFixed(2)}</div>
-              </div>
-              
-              <div style="position: absolute; bottom: 15mm; right: 5mm; font-size: 6pt;">
-                Annahmestelle
-              </div>
-            </div>
-            
-            <!-- Payment Section (Right) -->
-            <div style="flex: 1; padding: 5mm; position: relative;">
-              <div style="font-weight: bold; margin-bottom: 5mm;">Zahlteil</div>
-              
-              <!-- QR Code -->
-              <div style="position: absolute; top: 5mm; right: 5mm;">
-                <img src="${qrCodeImage}" alt="Swiss QR Code" style="width: 46mm; height: 46mm;" />
-                <div style="text-align: center; margin-top: 2mm; font-size: 6pt;">
-                  🇨🇭 Swiss QR Code
-                </div>
-              </div>
-              
-              <!-- Payment Information -->
-              <div style="width: 55mm;">
-                <div style="margin-bottom: 3mm;">
-                  <div style="font-weight: bold; font-size: 6pt;">Währung</div>
-                  <div>CHF</div>
-                </div>
-                
-                <div style="margin-bottom: 3mm;">
-                  <div style="font-weight: bold; font-size: 6pt;">Betrag</div>
-                  <div style="font-weight: bold; font-size: 10pt;">${remainingAmountCHF.toFixed(2)}</div>
-                </div>
-                
-                <div style="margin-bottom: 3mm;">
-                  <div style="font-weight: bold; font-size: 6pt;">Konto / Payable to</div>
-                  <div>${company.iban || 'CH21 0900 0000 1001 5000 6'}</div>
-                  <div>${company.name}</div>
-                  <div>${company.address}</div>
-                  <div>${company.zip} ${company.city}</div>
-                </div>
-                
-                <div style="margin-bottom: 3mm;">
-                  <div style="font-weight: bold; font-size: 6pt;">Referenz</div>
-                  <div style="font-size: 8pt; word-break: break-all;">${invoice.qr_reference}</div>
-                </div>
-                
-                <div style="margin-bottom: 3mm;">
-                  <div style="font-weight: bold; font-size: 6pt;">Zusätzliche Informationen</div>
-                  <div style="font-size: 8pt;">Rechnung ${invoice.number}</div>
-                  <div style="font-size: 8pt;">${template.title}</div>
-                  <div style="font-size: 8pt;">Zahlbar bis: ${new Date(Date.now() + (level === 3 ? 3 : level === 2 ? 5 : 10) * 24 * 60 * 60 * 1000).toLocaleDateString('de-CH')}</div>
-                </div>
-                
-                <div>
-                  <div style="font-weight: bold; font-size: 6pt;">Zahlbar durch</div>
-                  <div>${invoice.customers.name}</div>
-                  ${invoice.customers.company ? `<div>${invoice.customers.company}</div>` : ''}
-                  <div>${invoice.customers.address}</div>
-                  <div>${invoice.customers.zip} ${invoice.customers.city}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Perforated Line -->
-          <div style="margin: 5mm 0; border-top: 1px dashed #000; text-align: center; font-size: 6pt; color: #666;">
-            ✂️ Hier abtrennen / Détacher ici / Staccare qui
-          </div>
-          
-        </div>
-
-        <!-- Closing -->
-        <div style="margin: 40px 0 20px 0;">
-          <p>Freundliche Grüsse</p>
-          <br>
-          <p><strong>${company.name}</strong></p>
-        </div>
-      </body>
-      </html>
-      `;
+            const htmlTemplate = (0, pdfTemplates_1.generateReminderPdfTemplate)({
+                invoice: {
+                    number: invoice.number,
+                    date: invoice.date,
+                    due_date: invoice.due_date,
+                    service_date: invoice.service_date,
+                    qr_reference: invoice.qr_reference,
+                    subtotal: invoice.subtotal,
+                    vat_amount: invoice.vat_amount,
+                    total: invoice.total,
+                    paid_amount: invoice.paid_amount || 0
+                },
+                customer: {
+                    name: invoice.customers.name,
+                    company: invoice.customers.company,
+                    address: invoice.customers.address,
+                    zip: invoice.customers.zip,
+                    city: invoice.customers.city,
+                    country: invoice.customers.country,
+                    email: invoice.customers.email,
+                    phone: invoice.customers.phone
+                },
+                company: {
+                    name: company.name,
+                    address: company.address,
+                    zip: company.zip,
+                    city: company.city,
+                    email: company.email,
+                    phone: company.phone,
+                    uid: company.uid,
+                    vat_number: company.vat_number,
+                    iban: company.iban,
+                    qr_iban: company.qr_iban,
+                    website: company.website
+                },
+                qrCodeImage,
+                logoBase64,
+                paymentReference: invoice.qr_reference,
+                referenceType: referenceType,
+                iban: iban || company.iban || '',
+                reminderLevel: level,
+                reminderFee,
+                daysOverdue,
+                language: (invoice.customers.language || company.default_language || 'de').toLowerCase()
+            });
+            const htmlPdf = require('html-pdf-node');
             const options = {
                 format: 'A4',
-                margin: {
-                    top: '20mm',
-                    bottom: '20mm',
-                    left: '20mm',
-                    right: '20mm'
-                },
+                margin: { top: '0', bottom: '0', left: '0', right: '0' },
                 printBackground: true,
-                timeout: 30000
+                displayHeaderFooter: false,
+                timeout: 30000,
+                preferCSSPageSize: true,
+                emulateMedia: 'print',
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--run-all-compositor-stages-before-draw'
+                ]
             };
             const file = { content: htmlTemplate };
+            console.log(`📄 Generating PDF for reminder level ${level}...`);
             pdfBuffer = await htmlPdf.generatePdf(file, options);
+            if (pdfBuffer) {
+                console.log(`✅ PDF generated: ${pdfBuffer.length} bytes`);
+            }
             const sanitizeForPath = (name) => {
                 return name.replace(/[^a-zA-Z0-9-_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
             };
@@ -1860,51 +1380,31 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
             const invoiceNumber = sanitizeForPath(invoice.number);
             const fileName = `Reminder-${level}-${invoice.number}.pdf`;
             const filePath = `${companyName}/${customerName}/${invoiceNumber}/${fileName}`;
-            if (!pdfBuffer) {
-                throw new Error('Failed to generate PDF buffer');
-            }
-            const { data: uploadData, error: uploadError } = await supabase_1.supabaseAdmin.storage
-                .from('invoices')
-                .upload(filePath, pdfBuffer, {
-                contentType: 'application/pdf',
-                upsert: false
-            });
-            if (uploadError) {
-                console.error('❌ Failed to upload reminder PDF to storage:', uploadError);
-            }
-            else {
-                pdfFilePath = uploadData.path;
-                console.log('✅ Reminder PDF uploaded successfully:', pdfFilePath);
-                const fileInfo = {
-                    id: crypto.randomUUID(),
-                    fileName: fileName,
-                    filePath: uploadData.path,
-                    fileType: 'reminder_pdf',
-                    reminderLevel: level,
-                    uploadedAt: new Date().toISOString()
-                };
-                const currentNotes = invoice.internal_notes || '{}';
-                let notesData = {};
-                try {
-                    if (currentNotes && currentNotes.trim() !== '' && currentNotes.trim().startsWith('{')) {
-                        notesData = JSON.parse(currentNotes);
-                    }
+            if (pdfBuffer && pdfBuffer.length > 0) {
+                const { data: uploadData, error: uploadError } = await supabase_1.supabaseAdmin.storage
+                    .from('invoices')
+                    .upload(filePath, pdfBuffer, {
+                    contentType: 'application/pdf',
+                    upsert: true
+                });
+                if (uploadError) {
+                    console.error('❌ Error uploading reminder PDF to storage:', uploadError);
                 }
-                catch (e) {
-                    notesData = {
-                        _oldNotes: currentNotes,
-                        files: []
+                else {
+                    console.log('✅ Reminder PDF uploaded successfully:', filePath);
+                    pdfFilePath = filePath;
+                    const existingNotes = invoice.internal_notes ? JSON.parse(invoice.internal_notes) : {};
+                    const updatedNotes = {
+                        ...existingNotes,
+                        files: {
+                            ...(existingNotes.files || {}),
+                            [`reminder_${level}`]: filePath
+                        }
                     };
+                    await supabase_1.db.invoices()
+                        .update({ internal_notes: JSON.stringify(updatedNotes) })
+                        .eq('id', invoiceId);
                 }
-                if (!notesData.files) {
-                    notesData.files = [];
-                }
-                notesData.files.push(fileInfo);
-                await supabase_1.db.invoices()
-                    .update({
-                    internal_notes: JSON.stringify(notesData)
-                })
-                    .eq('id', invoiceId);
             }
         }
         catch (pdfError) {
@@ -1913,106 +1413,58 @@ exports.sendInvoiceReminder = (0, errorHandler_1.asyncHandler)(async (req, res) 
         const { data: updatedInvoice, error: updateError } = await supabase_1.db.invoices()
             .update({
             reminder_level: level,
-            last_reminder_at: new Date().toISOString(),
-            email_sent_count: (invoice.email_sent_count || 0) + 1
+            last_reminder_at: new Date().toISOString()
         })
             .eq('id', invoiceId)
-            .eq('company_id', companyId)
             .select()
             .single();
         if (updateError) {
-            (0, supabase_1.handleSupabaseError)(updateError, 'update reminder level');
+            console.error('❌ Error updating invoice:', updateError);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to update invoice reminder level'
+            });
             return;
         }
+        console.log('✅ Invoice updated with reminder level:', level);
+        const { data: invoiceWithPdf, error: fetchError } = await supabase_1.db.invoices()
+            .select(`
+        *,
+        customers (
+          id, name, company, email, address, zip, city, country, phone
+        )
+      `)
+            .eq('id', invoiceId)
+            .single();
+        if (fetchError || !invoiceWithPdf) {
+            console.error('❌ Error fetching updated invoice:', fetchError);
+        }
         try {
-            const { Resend } = require('resend');
-            const resend = new Resend(process.env.RESEND_API_KEY);
-            const verifiedEmail = 'mkrshkov@gmail.com';
-            const daysSinceDue = Math.floor((new Date().getTime() - new Date(invoice.due_date).getTime()) / (1000 * 60 * 60 * 24));
-            const totalAmountCHF = invoice.total / 100;
-            const paidAmountCHF = (invoice.paid_amount || 0) / 100;
-            const remainingAmountCHF = totalAmountCHF - paidAmountCHF;
-            const emailData = {
-                from: `${config_1.config.email.fromName} <${config_1.config.email.fromEmail}>`,
-                to: [verifiedEmail],
-                subject: `${level}. Mahnung - Rechnung ${invoice.number}`,
-                html: `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <title>Payment Reminder</title>
-          </head>
-          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-              <h2 style="color: #2563eb; margin: 0;">${level}. Mahnung - Rechnung ${invoice.number}</h2>
-            </div>
-            
-            <p>Sehr geehrte Damen und Herren,</p>
-            
-            <p>Es sind bereits ${daysSinceDue} Tage seit dem Fälligkeitsdatum vergangen, und wir haben noch keine vollständige Zahlung erhalten.</p>
-            
-            <div style="background: #f1f5f9; padding: 15px; border-radius: 6px; margin: 20px 0;">
-              <p><strong>Rechnungsnummer:</strong> ${invoice.number}</p>
-              <p><strong>Rechnungsdatum:</strong> ${new Date(invoice.date).toLocaleDateString('de-CH')}</p>
-              <p><strong>Fälligkeitsdatum:</strong> ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</p>
-              <p><strong>Rechnungsbetrag:</strong> CHF ${totalAmountCHF.toFixed(2)}</p>
-              <p><strong>Bezahlt:</strong> CHF ${paidAmountCHF.toFixed(2)}</p>
-              <p><strong>Offener Betrag:</strong> <strong style="color: #dc2626;">CHF ${remainingAmountCHF.toFixed(2)}</strong></p>
-            </div>
-            
-            <p>Bitte sehen Sie die beigefügte PDF-Datei für weitere Details.</p>
-            
-            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-              <p>Freundliche Grüsse<br><strong>${company.name}</strong></p>
-              <p style="font-size: 12px; color: #6b7280;">
-                Test email sent to ${verifiedEmail}
-              </p>
-            </div>
-          </body>
-          </html>
-        `,
-                text: `${level}. Mahnung - Rechnung ${invoice.number}\n\nSehr geehrte Damen und Herren,\n\nEs sind bereits ${daysSinceDue} Tage seit dem Fälligkeitsdatum vergangen, und wir haben noch keine vollständige Zahlung erhalten.\n\nRechnungsnummer: ${invoice.number}\nRechnungsdatum: ${new Date(invoice.date).toLocaleDateString('de-CH')}\nFälligkeitsdatum: ${new Date(invoice.due_date).toLocaleDateString('de-CH')}\nOffener Betrag: CHF ${remainingAmountCHF.toFixed(2)}\n\nBitte sehen Sie die beigefügte PDF-Datei für weitere Details.\n\nFreundliche Grüsse\n${company.name}\n\nTest email sent to ${verifiedEmail}`
-            };
-            if (pdfBuffer && Buffer.isBuffer(pdfBuffer)) {
-                emailData.attachments = [{
-                        filename: `Mahnung-${level}-${invoice.number}.pdf`,
-                        content: pdfBuffer
-                    }];
-            }
-            const result = await resend.emails.send(emailData);
-            if (result.data?.id) {
-                console.log(`✅ Reminder ${level} sent successfully to ${verifiedEmail} (Message ID: ${result.data.id})`);
-            }
-            else {
-                console.error(`❌ Failed to send reminder email:`, result.error);
-            }
+            console.log('📧 Sending reminder email to:', invoice.customers.email);
+            const emailService = emailService_1.EmailService.getInstance();
+            await emailService.sendInvoiceReminder({
+                invoice: (invoiceWithPdf || invoice),
+                customer: invoice.customers,
+                company: company,
+                reminderLevel: level
+            });
+            console.log('✅ Reminder email sent successfully');
+            res.status(200).json({
+                success: true,
+                data: {
+                    invoice: updatedInvoice,
+                    reminderLevel: level,
+                    emailSent: true
+                }
+            });
         }
         catch (emailError) {
-            console.error('Error sending reminder email:', emailError);
+            console.error('❌ Error sending reminder email:', emailError);
+            res.status(500).json({
+                success: false,
+                error: 'Reminder level updated but failed to send email: ' + emailError.message
+            });
         }
-        try {
-            await (0, auditController_1.createAuditLog)(companyId, req.user.id, req.user.name, 'INVOICE_REMINDER_SENT', 'INVOICE', invoiceId, {
-                invoiceNumber: invoice.number,
-                reminderLevel: level,
-                customerEmail: invoice.customers?.email,
-                remainingAmount: (invoice.total - (invoice.paid_amount || 0)) / 100
-            }, req.ip, req.get('User-Agent'));
-        }
-        catch (auditError) {
-            console.error('Error creating audit log:', auditError);
-        }
-        res.json({
-            success: true,
-            message: `Reminder ${level} sent successfully to mkrshkov@gmail.com`,
-            data: {
-                invoice: updatedInvoice,
-                reminderLevel: level,
-                sentTo: 'mkrshkov@gmail.com',
-                sentAt: new Date().toISOString(),
-                testMode: true
-            }
-        });
     }
     catch (error) {
         (0, supabase_1.handleSupabaseError)(error, 'send reminder');
@@ -2102,254 +1554,121 @@ exports.generateReminderPdf = (0, errorHandler_1.asyncHandler)(async (req, res) 
                 console.error('❌ Error fetching logo for reminder PDF:', logoFetchError);
             }
         }
-        const reminderTemplates = {
-            1: {
-                title: '1. Mahnung',
-                subject: `1. Zahlungserinnerung - Rechnung ${invoice.number}`,
-                salutation: 'Sehr geehrte Damen und Herren',
-                body: `unser System zeigt, dass die nachstehende Rechnung noch nicht beglichen wurde. Wir bitten Sie höflich, den offenen Betrag innerhalb der nächsten 10 Tage zu begleichen.
-
-Sollten Sie die Zahlung bereits veranlasst haben, betrachten Sie dieses Schreiben als gegenstandslos.`,
-                closing: 'Freundliche Grüsse',
-                urgency: 'info',
-                fee: 0
-            },
-            2: {
-                title: '2. Mahnung',
-                subject: `2. Mahnung - Rechnung ${invoice.number}`,
-                salutation: 'Sehr geehrte Damen und Herren',
-                body: `trotz unserer ersten Mahnung ist die nachstehende Rechnung noch immer offen. Wir bitten Sie dringend, den Betrag innerhalb von 5 Tagen zu begleichen.
-
-Bei weiterem Zahlungsverzug sehen wir uns leider veranlasst, weitere Massnahmen zu ergreifen.`,
-                closing: 'Mit freundlichen Grüssen',
-                urgency: 'warning',
-                fee: 20.00
-            },
-            3: {
-                title: '3. und letzte Mahnung',
-                subject: `Letzte Mahnung - Rechnung ${invoice.number}`,
-                salutation: 'Sehr geehrte Damen und Herren',
-                body: `dies ist unsere letzte Mahnung für die nachstehende Rechnung. Sollte der offene Betrag nicht innerhalb von 3 Tagen beglichen werden, werden wir ohne weitere Vorankündigung rechtliche Schritte einleiten.
-
-Dies kann zusätzliche Kosten zur Folge haben, die wir Ihnen in Rechnung stellen werden.`,
-                closing: 'Hochachtungsvoll',
-                urgency: 'danger',
-                fee: 50.00
-            }
+        const reminderFees = {
+            1: 0,
+            2: 20.00,
+            3: 50.00
         };
-        const template = reminderTemplates[reminderLevel];
+        const reminderFee = reminderFees[reminderLevel];
         const daysOverdue = Math.floor((new Date().getTime() - new Date(invoice.due_date).getTime()) / (1000 * 60 * 60 * 24));
-        const htmlTemplate = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <title>${template.title} - ${invoice.number}</title>
-      <style>
-        body { 
-          font-family: Arial, sans-serif; 
-          margin: 0; 
-          padding: 20mm; 
-          font-size: 12px;
-          line-height: 1.4;
-          color: #333;
-        }
-        .header { 
-          display: flex; 
-          justify-content: space-between; 
-          align-items: start;
-          margin-bottom: 40px;
-          padding-bottom: 20px;
-          border-bottom: 2px solid #e5e5e5;
-        }
-        .company-info { flex: 1; }
-        .logo { width: 150px; height: 80px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; }
-        .reminder-title { 
-          font-size: 20px; 
-          font-weight: bold; 
-          color: ${template.urgency === 'danger' ? '#dc2626' : template.urgency === 'warning' ? '#d97706' : '#2563eb'};
-          margin: 30px 0 20px 0;
-          text-align: center;
-          text-transform: uppercase;
-        }
-        .customer-address {
-          margin: 40px 0;
-          line-height: 1.3;
-        }
-        .reminder-content {
-          margin: 30px 0;
-          line-height: 1.6;
-        }
-        .invoice-details {
-          margin: 30px 0;
-          padding: 20px;
-          background-color: #f8f9fa;
-          border: 1px solid #ddd;
-          border-left: 4px solid ${template.urgency === 'danger' ? '#dc2626' : template.urgency === 'warning' ? '#d97706' : '#2563eb'};
-        }
-        .invoice-table {
-          width: 100%;
-          border-collapse: collapse;
-          margin: 20px 0;
-        }
-        .invoice-table th, .invoice-table td {
-          border: 1px solid #ddd;
-          padding: 8px;
-          text-align: left;
-        }
-        .invoice-table th {
-          background-color: #f8f9fa;
-          font-weight: bold;
-        }
-        .reminder-fees {
-          margin: 20px 0;
-          padding: 15px;
-          background-color: #fef3c7;
-          border: 1px solid #f59e0b;
-          border-radius: 5px;
-        }
-        .payment-info {
-          margin: 30px 0;
-          padding: 20px;
-          background-color: #f0f9ff;
-          border: 1px solid #0ea5e9;
-        }
-        .urgency-${template.urgency} {
-          border-left: 4px solid ${template.urgency === 'danger' ? '#dc2626' : template.urgency === 'warning' ? '#d97706' : '#2563eb'};
-        }
-      </style>
-    </head>
-    <body>
-      <!-- Header with Company Info -->
-      <div class="header">
-        <div class="company-info">
-          <h1>${company.name}</h1>
-          <div>${company.address}</div>
-          <div>${company.zip} ${company.city}</div>
-          <div>Schweiz</div>
-          <br>
-          <div>E-Mail: ${company.email}</div>
-          ${company.phone ? `<div>Tel: ${company.phone}</div>` : ''}
-          ${company.uid ? `<div>UID: ${company.uid}</div>` : ''}
-        </div>
-        <div class="logo">
-          ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 220px; max-height: 150px; width: auto; height: auto; object-fit: contain; display: block;">` : ''}
-        </div>
-      </div>
-
-      <!-- Customer Address -->
-      <div class="customer-address">
-        <strong>${invoice.customers.name}</strong><br>
-        ${invoice.customers.company ? `${invoice.customers.company}<br>` : ''}
-        ${invoice.customers.address}<br>
-        ${invoice.customers.zip} ${invoice.customers.city}
-      </div>
-
-      <!-- Date and Place -->
-      <div style="text-align: right; margin: 20px 0;">
-        ${company.city}, ${new Date().toLocaleDateString('de-CH')}
-      </div>
-
-      <!-- Reminder Title -->
-      <div class="reminder-title">${template.title}</div>
-
-      <!-- Subject Line -->
-      <div style="font-weight: bold; margin: 20px 0;">
-        Betreff: ${template.subject}
-      </div>
-
-      <!-- Reminder Content -->
-      <div class="reminder-content">
-        <p>${template.salutation},</p>
-        <p>${template.body}</p>
-      </div>
-
-      <!-- Invoice Details -->
-      <div class="invoice-details urgency-${template.urgency}">
-        <h3 style="margin-top: 0;">📄 Rechnungsdetails</h3>
-        <table class="invoice-table">
-          <tr>
-            <td><strong>Rechnungsnummer:</strong></td>
-            <td>${invoice.number}</td>
-          </tr>
-          <tr>
-            <td><strong>Rechnungsdatum:</strong></td>
-            <td>${new Date(invoice.date).toLocaleDateString('de-CH')}</td>
-          </tr>
-          <tr>
-            <td><strong>Fälligkeitsdatum:</strong></td>
-            <td>${new Date(invoice.due_date).toLocaleDateString('de-CH')}</td>
-          </tr>
-          <tr>
-            <td><strong>Tage überfällig:</strong></td>
-            <td style="color: red; font-weight: bold;">${daysOverdue} Tage</td>
-          </tr>
-          <tr>
-            <td><strong>Offener Betrag:</strong></td>
-            <td style="font-size: 14px; font-weight: bold;">CHF ${(invoice.total / 100).toFixed(2)}</td>
-          </tr>
-        </table>
-      </div>
-
-      ${template.fee > 0 ? `
-      <!-- Reminder Fees -->
-      <div class="reminder-fees">
-        <h4 style="margin-top: 0;">💰 Mahngebühren</h4>
-        <p>Für diese ${template.title} berechnen wir Ihnen eine Bearbeitungsgebühr von <strong>CHF ${template.fee.toFixed(2)}</strong>.</p>
-        <p><strong>Neuer Gesamtbetrag: CHF ${(invoice.total + template.fee).toFixed(2)}</strong></p>
-      </div>
-      ` : ''}
-
-      <!-- Payment Information -->
-      <div class="payment-info">
-        <h3 style="margin-top: 0;">💳 Zahlungsinformationen</h3>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-          <div>
-            <div><strong>IBAN:</strong> ${company.iban || 'CH21 0900 0000 1001 5000 6'}</div>
-            <div><strong>Referenz:</strong> ${invoice.qr_reference}</div>
-            <div><strong>Betrag:</strong> CHF ${(invoice.total + template.fee).toFixed(2)}</div>
-          </div>
-          <div>
-            <div><strong>Empfänger:</strong> ${company.name}</div>
-            <div><strong>Zahlbar bis:</strong> ${new Date(Date.now() + (reminderLevel === 3 ? 3 : reminderLevel === 2 ? 5 : 10) * 24 * 60 * 60 * 1000).toLocaleDateString('de-CH')}</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Closing -->
-      <div style="margin: 40px 0 20px 0;">
-        <p>${template.closing}</p>
-        <br>
-        <p><strong>${company.name}</strong></p>
-      </div>
-
-      <!-- Footer -->
-      <div style="margin-top: 50px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 10px; color: #666; text-align: center;">
-        ${template.title} generiert am ${new Date().toLocaleDateString('de-CH')} um ${new Date().toLocaleTimeString('de-CH')}
-        <br>
-        ${reminderLevel === 3 ? '⚠️ LETZTE MAHNUNG - Bei Nichtzahlung erfolgt Inkasso' : `Mahnstufe ${reminderLevel} von 3`}
-      </div>
-    </body>
-    </html>
-    `;
+        const getReferenceTypeAndIban = (qrReference, company) => {
+            const referenceType = qrReference.startsWith('RF') ? 'SCOR' : 'QRR';
+            const iban = referenceType === 'QRR' ? company.qr_iban : company.iban;
+            return { referenceType, iban };
+        };
+        const { referenceType, iban } = getReferenceTypeAndIban(invoice.qr_reference, company);
+        const remainingAmount = invoice.total - (invoice.paid_amount || 0);
+        const totalWithFee = remainingAmount + (reminderFee * 100);
+        const QRCode = require('qrcode');
+        const qrPayload = [
+            'SPC',
+            '0200',
+            '1',
+            iban || '',
+            'K',
+            company.name || '',
+            company.address || '',
+            company.zip || '',
+            company.city || '',
+            company.country || 'CH',
+            '', '', '', '', '', '', '',
+            (totalWithFee / 100).toFixed(2),
+            'CHF',
+            'K',
+            invoice.customers.name || '',
+            invoice.customers.address || '',
+            invoice.customers.zip || '',
+            invoice.customers.city || '',
+            invoice.customers.country || 'CH',
+            '', '', '', '', '', '', '',
+            referenceType,
+            invoice.qr_reference || '',
+            `Mahnung ${reminderLevel} - Rechnung ${invoice.number}`,
+            'EPD'
+        ].join('\r\n');
+        const qrCodeImage = await QRCode.toDataURL(qrPayload, {
+            errorCorrectionLevel: 'M',
+            type: 'image/png',
+            width: 300,
+            margin: 1
+        });
+        const htmlTemplate = (0, pdfTemplates_1.generateReminderPdfTemplate)({
+            invoice: {
+                number: invoice.number,
+                date: invoice.date,
+                due_date: invoice.due_date,
+                service_date: invoice.service_date,
+                qr_reference: invoice.qr_reference,
+                subtotal: invoice.subtotal,
+                vat_amount: invoice.vat_amount,
+                total: invoice.total,
+                paid_amount: invoice.paid_amount || 0
+            },
+            customer: {
+                name: invoice.customers.name,
+                company: invoice.customers.company,
+                address: invoice.customers.address,
+                zip: invoice.customers.zip,
+                city: invoice.customers.city,
+                country: invoice.customers.country,
+                email: invoice.customers.email,
+                phone: invoice.customers.phone
+            },
+            company: {
+                name: company.name,
+                address: company.address,
+                zip: company.zip,
+                city: company.city,
+                email: company.email,
+                phone: company.phone,
+                uid: company.uid,
+                vat_number: company.vat_number,
+                iban: company.iban,
+                qr_iban: company.qr_iban,
+                website: company.website
+            },
+            qrCodeImage,
+            logoBase64,
+            paymentReference: invoice.qr_reference,
+            referenceType: referenceType,
+            iban: iban || company.iban || '',
+            reminderLevel: reminderLevel,
+            reminderFee,
+            daysOverdue,
+            language: (invoice.customers.language || company.default_language || 'de').toLowerCase()
+        });
         try {
             const htmlPdf = require('html-pdf-node');
             console.log(`Starting reminder PDF generation for invoice: ${invoice.number}, level: ${reminderLevel}`);
             const options = {
                 format: 'A4',
-                margin: {
-                    top: '20mm',
-                    bottom: '20mm',
-                    left: '20mm',
-                    right: '20mm'
-                },
+                margin: { top: '0', bottom: '0', left: '0', right: '0' },
                 printBackground: true,
                 displayHeaderFooter: false,
-                timeout: 10000
+                timeout: 30000,
+                preferCSSPageSize: true,
+                emulateMedia: 'print',
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--run-all-compositor-stages-before-draw'
+                ]
             };
             const file = { content: htmlTemplate };
             const pdfBuffer = await htmlPdf.generatePdf(file, options);
-            console.log('Reminder PDF generated successfully, size:', pdfBuffer.length);
+            console.log('✅ Reminder PDF generated successfully, size:', pdfBuffer.length);
             res.setHeader('Content-Type', 'application/pdf');
             res.setHeader('Content-Disposition', `attachment; filename="Mahnung-${reminderLevel}-${invoice.number}.pdf"`);
             res.setHeader('Content-Length', pdfBuffer.length.toString());
@@ -2407,6 +1726,11 @@ exports.updateInvoice = (0, errorHandler_1.asyncHandler)(async (req, res) => {
         }
         if (updateData.dueDate) {
             updateFields.due_date = updateData.dueDate;
+        }
+        if (updateData.serviceDate) {
+            updateFields.service_date = typeof updateData.serviceDate === 'string'
+                ? updateData.serviceDate
+                : new Date(updateData.serviceDate).toISOString().split('T')[0];
         }
         if (updateData.discountCode !== undefined) {
             updateFields.discount_code = updateData.discountCode;

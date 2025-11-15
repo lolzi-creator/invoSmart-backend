@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.generateQRReference = exports.generateInvoiceNumber = exports.handleSupabaseError = exports.db = exports.supabaseAdmin = exports.supabase = void 0;
+exports.generatePaymentReference = exports.generateSCORReference = exports.generateQRReference = exports.generateInvoiceNumber = exports.handleSupabaseError = exports.db = exports.supabaseAdmin = exports.supabase = void 0;
 const supabase_js_1 = require("@supabase/supabase-js");
 const config_1 = require("../config");
 exports.supabase = (0, supabase_js_1.createClient)(config_1.config.supabase.url, config_1.config.supabase.anonKey, {
@@ -69,4 +69,45 @@ const generateQRReference = async (invoiceNumber, companyId) => {
     return data;
 };
 exports.generateQRReference = generateQRReference;
+const generateSCORReference = async (invoiceNumber, companyId) => {
+    const { data, error } = await exports.supabaseAdmin.rpc('generate_scor_reference', {
+        invoice_num: invoiceNumber,
+        company_uuid: companyId
+    });
+    if (error) {
+        (0, exports.handleSupabaseError)(error, 'generate SCOR reference');
+    }
+    return data;
+};
+exports.generateSCORReference = generateSCORReference;
+const generatePaymentReference = async (invoiceNumber, companyId, company) => {
+    const hasQRIban = Boolean(company.qr_iban && company.qr_iban.trim());
+    const hasNormalIban = Boolean(company.iban && company.iban.trim());
+    if (!hasQRIban && !hasNormalIban) {
+        throw new Error('Company must have either QR-IBAN or normal IBAN configured');
+    }
+    if (hasQRIban) {
+        const reference = await (0, exports.generateQRReference)(invoiceNumber, companyId);
+        if (!/^\d{27}$/.test(reference)) {
+            throw new Error(`Invalid QR reference format: must be exactly 27 numeric digits, got: ${reference}`);
+        }
+        return {
+            reference,
+            referenceType: 'QRR',
+            iban: company.qr_iban.replace(/\s/g, '')
+        };
+    }
+    else {
+        const reference = await (0, exports.generateSCORReference)(invoiceNumber, companyId);
+        if (!/^RF\d{2}\d+$/.test(reference)) {
+            throw new Error(`Invalid SCOR reference format: must start with RF, got: ${reference}`);
+        }
+        return {
+            reference,
+            referenceType: 'SCOR',
+            iban: company.iban.replace(/\s/g, '')
+        };
+    }
+};
+exports.generatePaymentReference = generatePaymentReference;
 //# sourceMappingURL=supabase.js.map

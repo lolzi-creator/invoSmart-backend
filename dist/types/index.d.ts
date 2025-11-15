@@ -61,6 +61,7 @@ export interface Invoice {
     company?: Company;
     date: Date;
     dueDate: Date;
+    serviceDate: Date;
     status: InvoiceStatus;
     subtotal: number;
     vatAmount: number;
@@ -251,9 +252,14 @@ export interface RegisterRequest {
     city: string;
     phone?: string;
     companyEmail: string;
+    website?: string;
     uid?: string;
     vatNumber?: string;
     iban?: string;
+    qrIban?: string;
+    bankName?: string;
+    paymentTerms?: number;
+    defaultLanguage?: string;
 }
 export interface ApiResponse<T = any> {
     success: boolean;

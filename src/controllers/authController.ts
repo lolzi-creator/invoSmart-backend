@@ -174,7 +174,12 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
     companyEmail,
     uid,
     vatNumber,
-    iban
+    iban,
+    qrIban,
+    website,
+    bankName,
+    paymentTerms,
+    defaultLanguage
   }: RegisterRequest = req.body
 
   try {
@@ -205,11 +210,13 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
         country: 'CH',
         phone: phone || null,
         email: companyEmail,
+        website: website || null,
         uid: uid || null,
         vat_number: vatNumber || null,
         iban: iban || null,
-        default_payment_terms: 30,
-        default_language: 'de'
+        qr_iban: qrIban || null,
+        default_payment_terms: paymentTerms || 30,
+        default_language: defaultLanguage || 'de'
       })
       .select()
       .single()

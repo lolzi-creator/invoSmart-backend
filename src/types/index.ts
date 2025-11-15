@@ -66,6 +66,7 @@ export interface Invoice {
   company?: Company
   date: Date
   dueDate: Date
+  serviceDate: Date // Leistungsdatum (zwingend für MWST-Abrechnung)
   status: InvoiceStatus
   subtotal: number // in Rappen
   vatAmount: number // in Rappen
@@ -277,9 +278,14 @@ export interface RegisterRequest {
   city: string
   phone?: string
   companyEmail: string
+  website?: string
   uid?: string
   vatNumber?: string
   iban?: string
+  qrIban?: string
+  bankName?: string
+  paymentTerms?: number
+  defaultLanguage?: string
 }
 
 export interface ApiResponse<T = any> {

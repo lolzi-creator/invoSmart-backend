@@ -150,7 +150,7 @@ exports.login = (0, errorHandler_1.asyncHandler)(async (req, res) => {
     }
 });
 exports.register = (0, errorHandler_1.asyncHandler)(async (req, res) => {
-    const { name, email, password, companyName, address, zip, city, phone, companyEmail, uid, vatNumber, iban } = req.body;
+    const { name, email, password, companyName, address, zip, city, phone, companyEmail, uid, vatNumber, iban, qrIban, website, bankName, paymentTerms, defaultLanguage } = req.body;
     try {
         const { data: existingUser } = await supabase_1.db.users()
             .select('id')
@@ -173,11 +173,13 @@ exports.register = (0, errorHandler_1.asyncHandler)(async (req, res) => {
             country: 'CH',
             phone: phone || null,
             email: companyEmail,
+            website: website || null,
             uid: uid || null,
             vat_number: vatNumber || null,
             iban: iban || null,
-            default_payment_terms: 30,
-            default_language: 'de'
+            qr_iban: qrIban || null,
+            default_payment_terms: paymentTerms || 30,
+            default_language: defaultLanguage || 'de'
         })
             .select()
             .single();

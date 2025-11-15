@@ -12,6 +12,7 @@ export const authenticateToken = (
   const token = authHeader && authHeader.split(' ')[1] // Bearer TOKEN
 
   if (!token) {
+    console.error('❌ No token provided in Authorization header')
     res.status(401).json({
       success: false,
       error: 'Access token required'
@@ -22,8 +23,10 @@ export const authenticateToken = (
   try {
     const decoded = jwt.verify(token, config.jwtSecret) as any
     req.user = decoded.user
+    console.log('✅ Token verified. User:', req.user)
     next()
-  } catch (error) {
+  } catch (error: any) {
+    console.error('❌ Token verification failed:', error.message)
     res.status(403).json({
       success: false,
       error: 'Invalid or expired token'

@@ -101,6 +101,7 @@ export const generateInvoiceNumber = async (companyId: string): Promise<string> 
 }
 
 // Helper function to generate QR reference using database function
+// QR references are 27-digit numeric and only used with QR-IBAN
 export const generateQRReference = async (invoiceNumber: string, companyId: string): Promise<string> => {
   const { data, error } = await supabaseAdmin.rpc('generate_qr_reference', {
     invoice_num: invoiceNumber,
@@ -112,6 +113,63 @@ export const generateQRReference = async (invoiceNumber: string, companyId: stri
   }
   
   return data
+}
+
+// Helper function to generate SCOR reference using database function
+// SCOR references start with "RF" and are only used with normal IBAN (not QR-IBAN)
+export const generateSCORReference = async (invoiceNumber: string, companyId: string): Promise<string> => {
+  const { data, error } = await supabaseAdmin.rpc('generate_scor_reference', {
+    invoice_num: invoiceNumber,
+    company_uuid: companyId
+  })
+  
+  if (error) {
+    handleSupabaseError(error, 'generate SCOR reference')
+  }
+  
+  return data
+}
+
+// Helper function to generate the appropriate reference based on company's IBAN setup
+// Returns { reference: string, referenceType: 'QRR' | 'SCOR', iban: string }
+export const generatePaymentReference = async (
+  invoiceNumber: string, 
+  companyId: string,
+  company: { qr_iban?: string | null, iban?: string | null }
+): Promise<{ reference: string, referenceType: 'QRR' | 'SCOR', iban: string }> => {
+  // Check if company has QR-IBAN
+  const hasQRIban = Boolean(company.qr_iban && company.qr_iban.trim())
+  const hasNormalIban = Boolean(company.iban && company.iban.trim())
+  
+  if (!hasQRIban && !hasNormalIban) {
+    throw new Error('Company must have either QR-IBAN or normal IBAN configured')
+  }
+  
+  if (hasQRIban) {
+    // Use QR reference (27-digit numeric) with QR-IBAN
+    const reference = await generateQRReference(invoiceNumber, companyId)
+    // Validate: QR reference must be 27 digits and numeric only
+    if (!/^\d{27}$/.test(reference)) {
+      throw new Error(`Invalid QR reference format: must be exactly 27 numeric digits, got: ${reference}`)
+    }
+    return {
+      reference,
+      referenceType: 'QRR',
+      iban: company.qr_iban!.replace(/\s/g, '')
+    }
+  } else {
+    // Use SCOR reference (RF prefix) with normal IBAN
+    const reference = await generateSCORReference(invoiceNumber, companyId)
+    // Validate: SCOR reference must start with RF
+    if (!/^RF\d{2}\d+$/.test(reference)) {
+      throw new Error(`Invalid SCOR reference format: must start with RF, got: ${reference}`)
+    }
+    return {
+      reference,
+      referenceType: 'SCOR',
+      iban: company.iban!.replace(/\s/g, '')
+    }
+  }
 }
 
 // Type definitions for database records
@@ -178,6 +236,7 @@ export interface DatabaseInvoice {
   company_id: string
   date: string
   due_date: string
+  service_date: string // Leistungsdatum (zwingend für MWST-Abrechnung)
   status: 'DRAFT' | 'OPEN' | 'PARTIAL_PAID' | 'PAID' | 'OVERDUE' | 'CANCELLED'
   subtotal: number
   vat_amount: number

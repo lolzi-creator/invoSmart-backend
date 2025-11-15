@@ -29,16 +29,38 @@ export const generateTestQR = asyncHandler(async (req: AuthenticatedRequest, res
     const currency = (req.body?.currency ?? 'CHF') as 'CHF' | 'EUR'
 
     // Decide reference type based on availability of QR-IBAN
-    const useQRR = Boolean(company.qr_iban)
-    const referenceType = useQRR ? 'QRR' : 'NON'
-    const reference = useQRR ? 'TEST123456789012345678901234' : ''
+    // QR references (27-digit numeric) only with QR-IBAN
+    // SCOR references (RF prefix) only with normal IBAN
+    const hasQRIban = Boolean(company.qr_iban && company.qr_iban.trim())
+    const hasNormalIban = Boolean(company.iban && company.iban.trim())
+    
+    let referenceType: 'QRR' | 'SCOR' | 'NON' = 'NON'
+    let reference = ''
+    let iban = ''
+    
+    if (hasQRIban) {
+      // Use QR reference with QR-IBAN
+      referenceType = 'QRR'
+      reference = '000000000000000000000000000' // 27-digit test reference
+      iban = company.qr_iban.replace(/\s/g, '')
+    } else if (hasNormalIban) {
+      // Use SCOR reference with normal IBAN
+      referenceType = 'SCOR'
+      reference = 'RF0000000000000000000000000' // Test SCOR reference
+      iban = company.iban.replace(/\s/g, '')
+    } else {
+      // No IBAN configured
+      referenceType = 'NON'
+      reference = ''
+      iban = ''
+    }
 
     // Build SPC payload (31 lines)
     const payload = [
       'SPC',               // QR Type
       '0200',              // Version
       '1',                 // Coding UTF-8
-      (company.qr_iban || company.iban || '').replace(/\s/g, ''),
+      iban,
       'S',                 // Creditor address (structured)
       company.name || '',
       company.address || '',
@@ -76,6 +98,9 @@ export const generateTestQR = asyncHandler(async (req: AuthenticatedRequest, res
 })
 
 export default generateTestQR
+
+
+
 
 
 

@@ -24,6 +24,7 @@ const permissions_1 = __importDefault(require("./routes/permissions"));
 const company_1 = __importDefault(require("./routes/company"));
 const dashboard_1 = __importDefault(require("./routes/dashboard"));
 const vatRates_1 = __importDefault(require("./routes/vatRates"));
+const exportRoutes_1 = __importDefault(require("./routes/exportRoutes"));
 const app = (0, express_1.default)();
 try {
     (0, config_1.validateConfig)();
@@ -83,6 +84,7 @@ app.use('/api/v1/permissions', permissions_1.default);
 app.use('/api/v1/company', company_1.default);
 app.use('/api/v1/dashboard', dashboard_1.default);
 app.use('/api/v1/vat-rates', vatRates_1.default);
+app.use('/api/v1/export', exportRoutes_1.default);
 console.log('✅ All API routes registered!');
 app.get('/api/v1/test', (req, res) => {
     res.json({

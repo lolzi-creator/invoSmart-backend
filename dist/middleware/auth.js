@@ -11,6 +11,7 @@ const authenticateToken = (req, res, next) => {
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) {
+        console.error('❌ No token provided in Authorization header');
         res.status(401).json({
             success: false,
             error: 'Access token required'
@@ -20,9 +21,11 @@ const authenticateToken = (req, res, next) => {
     try {
         const decoded = jsonwebtoken_1.default.verify(token, config_1.config.jwtSecret);
         req.user = decoded.user;
+        console.log('✅ Token verified. User:', req.user);
         next();
     }
     catch (error) {
+        console.error('❌ Token verification failed:', error.message);
         res.status(403).json({
             success: false,
             error: 'Invalid or expired token'

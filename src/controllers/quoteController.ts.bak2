@@ -5,7 +5,7 @@ import { Quote, QuoteItem, AuthenticatedRequest } from '../types'
 import { config } from '../config'
 import { createAuditLog } from './auditController'
 import { emailTranslations, getCustomerLanguage } from '../utils/emailTranslations'
-import { generateQuotePdfTemplate, SupportedLanguage } from '../utils/pdfTemplates'
+import { generateQuotePdfTemplate } from '../utils/pdfTemplates'
 import EmailService from '../services/emailService'
 
 // Helper function to convert DB quote to API quote
@@ -944,100 +944,31 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
       return
     }
     
-    // Generate FRESH professional PDF (don't use cached old PDF!)
-    console.log('🎨 Generating fresh professional quote PDF...')
+    // Try to find the PDF path from storage
+    let pdfPath: string | undefined
     
-    // Fetch company logo
-    let logoBase64: string | null = null
-    if (quote.companies?.logo_url) {
-      try {
-        let logoPath = quote.companies.logo_url
-        if (logoPath.includes('/storage/v1/object/public/logos/')) {
-          logoPath = logoPath.split('/storage/v1/object/public/logos/')[1].split('?')[0]
-        } else if (logoPath.includes('/logos/')) {
-          logoPath = logoPath.split('/logos/')[1].split('?')[0]
-        } else if (logoPath.startsWith('logos/')) {
-          logoPath = logoPath.replace('logos/', '').split('?')[0]
-        }
+    try {
+      // List files in the quotes folder for this company
+      const { data: files, error: listError } = await supabaseAdmin.storage
+        .from('quotes')
+        .list(companyId)
+      
+      if (!listError && files) {
+        // Find the PDF file that contains the quote number
+        const pdfFile = files.find((file: any) => 
+          file.name.includes(fullQuote.number) && file.name.endsWith('.pdf')
+        )
         
-        const { data: logoData, error: logoError } = await supabaseAdmin.storage
-          .from('logos')
-          .download(logoPath)
-        
-        if (!logoError && logoData) {
-          const logoBuffer = Buffer.from(await logoData.arrayBuffer())
-          logoBase64 = `data:${logoData.type || 'image/png'};base64,${logoBuffer.toString('base64')}`
+        if (pdfFile) {
+          pdfPath = `${companyId}/${pdfFile.name}`
+          console.log('✅ Found PDF for email:', pdfFile.name)
+        } else {
+          console.log('⚠️ No PDF found for quote:', fullQuote.number)
         }
-      } catch (err) {
-        console.log('⚠️ Could not fetch logo:', err)
       }
+    } catch (error) {
+      console.log('Could not find PDF in storage:', error)
     }
-    
-    // Generate acceptance QR code
-    const QRCode = require('qrcode')
-    let acceptanceQRCode: string | undefined
-    if (fullQuote.acceptanceLink) {
-      acceptanceQRCode = await QRCode.toDataURL(fullQuote.acceptanceLink, {
-        type: 'image/png',
-        width: 200,
-        margin: 1,
-        color: { dark: '#000000', light: '#FFFFFF' }
-      })
-    }
-    
-    // Generate PDF using professional template
-    const htmlTemplate = generateQuotePdfTemplate({
-      quote: {
-        number: fullQuote.number,
-        date: fullQuote.date,
-        expiryDate: fullQuote.expiryDate,
-        subtotal: Math.round(fullQuote.subtotal * 100),
-        vatAmount: Math.round(fullQuote.vatAmount * 100),
-        total: Math.round(fullQuote.total * 100),
-        acceptanceLink: fullQuote.acceptanceLink,
-        items: fullQuote.items.map(item => ({
-          description: item.description,
-          quantity: item.quantity,
-          unit: item.unit,
-          unitPrice: Math.round(item.unitPrice * 100),
-          vatRate: Math.round(item.vatRate * 100),
-          lineTotal: Math.round(item.lineTotal * 100)
-        }))
-      },
-      company: quote.companies,
-      customer: quote.customers,
-      logoBase64,
-      acceptanceQRCode,
-      language: (((quote.customers?.language ?? quote.companies?.default_language) ?? 'de') as string).toLowerCase() as SupportedLanguage
-    })
-    
-    const htmlPdf = require('html-pdf-node')
-    const pdfBuffer = await htmlPdf.generatePdf(
-      { content: htmlTemplate },
-      { 
-        format: 'A4', 
-        preferCSSPageSize: true,
-        printBackground: true,
-        margin: { top: '0mm', bottom: '0mm', left: '0mm', right: '0mm' }
-      }
-    )
-    
-    // Upload fresh PDF to storage
-    const fileName = `Quote-${fullQuote.number}-${Date.now()}.pdf`
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from('quotes')
-      .upload(`${companyId}/${fileName}`, pdfBuffer, {
-        contentType: 'application/pdf',
-        upsert: true
-      })
-    
-    if (uploadError) {
-      console.error('❌ Error uploading fresh PDF:', uploadError)
-    } else {
-      console.log('✅ Fresh professional PDF generated and uploaded:', fileName)
-    }
-    
-    const pdfPath = `${companyId}/${fileName}`
     
     // Send quote email using professional EmailService
     const emailService = EmailService.getInstance()
@@ -1156,21 +1087,184 @@ export const downloadQuotePDF = asyncHandler(async (req: AuthenticatedRequest, r
     const quote = createQuoteResponse(quoteData, quoteData.customers, quoteData.companies, quoteData.quote_items)
     
     // Use the professional quote PDF template
-    const htmlTemplate = generateQuotePdfTemplate({
+    const htmlTemplate = await generateQuotePdfTemplate({
       quote: {
         number: quote.number,
         date: quote.date,
         expiryDate: quote.expiryDate,
+        status: quote.status,
         subtotal: quote.subtotal,
         vatAmount: quote.vatAmount,
         total: quote.total,
-        acceptanceLink: quote.acceptanceLink,
-        items: quote.items
+        acceptanceLink: quote.acceptanceLink
       },
+      items: quote.items,
       company: quoteData.companies,
-      customer: quoteData.customers,
-      language: (((quoteData.customers?.language ?? quoteData.companies?.default_language) ?? 'de') as string).toLowerCase() as SupportedLanguage
+      customer: quoteData.customers
     })
+
+    // OLD CODE REPLACED - Now using generateQuotePdfTemplate
+    const htmlTemplateOld = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>Quote ${quote.number}</title>
+        <style>
+          body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            font-size: 12px;
+            color: #333;
+          }
+          .header { 
+            display: flex; 
+            justify-content: space-between; 
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e5e5e5;
+          }
+          .company-info { flex: 1; }
+          .logo { width: 150px; height: 80px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; }
+          .quote-title { 
+            font-size: 24px; 
+            font-weight: bold; 
+            color: #f59e0b;
+            margin: 20px 0;
+          }
+          .quote-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-bottom: 30px;
+          }
+          .customer-info { }
+          .quote-meta { text-align: right; }
+          .items-table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin: 30px 0;
+          }
+          .items-table th, .items-table td { 
+            border: 1px solid #ddd; 
+            padding: 8px; 
+            text-align: left;
+          }
+          .items-table th { 
+            background-color: #f8f9fa; 
+            font-weight: bold;
+          }
+          .items-table .number { text-align: right; }
+          .totals { 
+            margin-top: 20px;
+            text-align: right;
+          }
+          .totals table {
+            margin-left: auto;
+            border-collapse: collapse;
+          }
+          .totals td {
+            padding: 5px 15px;
+            border-bottom: 1px solid #eee;
+          }
+          .totals .total-row {
+            font-weight: bold;
+            font-size: 14px;
+            border-top: 2px solid #333;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="company-info">
+            <h1>${company?.name || 'Company'}</h1>
+            <div>${company?.address || 'Address'}</div>
+            <div>${company?.zip || ''} ${company?.city || 'City'}</div>
+            <div>Schweiz</div>
+            <br>
+            <div>E-Mail: ${company?.email || 'email@company.com'}</div>
+            ${company?.phone ? `<div>Tel: ${company.phone}</div>` : ''}
+          </div>
+          <div class="logo">
+            ${logoBase64 ? `<img src="${logoBase64}" alt="Logo" style="max-width: 220px; max-height: 150px; width: auto; height: auto; object-fit: contain; display: block;">` : ''}
+          </div>
+        </div>
+
+        <div class="quote-title">Quote ${quote.number}</div>
+
+        <div class="quote-details">
+          <div class="customer-info">
+            <h3>Quote For:</h3>
+            <div><strong>${quote.customer?.name || 'Customer'}</strong></div>
+            ${quote.customer?.company ? `<div>${quote.customer.company}</div>` : ''}
+            <div>${quote.customer?.address || 'Address'}</div>
+            <div>${quote.customer?.zip || ''} ${quote.customer?.city || 'City'}</div>
+            <div>${quote.customer?.country || 'CH'}</div>
+            ${quote.customer?.email ? `<br><div>E-Mail: ${quote.customer.email}</div>` : ''}
+          </div>
+          <div class="quote-meta">
+            <table>
+              <tr><td><strong>Quote Number:</strong></td><td>${quote.number}</td></tr>
+              <tr><td><strong>Date:</strong></td><td>${new Date(quote.date).toLocaleDateString('de-CH')}</td></tr>
+              <tr><td><strong>Valid Until:</strong></td><td>${new Date(quote.expiryDate).toLocaleDateString('de-CH')}</td></tr>
+              <tr><td><strong>Status:</strong></td><td>${quote.status}</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <table class="items-table">
+          <thead>
+            <tr>
+              <th>Pos.</th>
+              <th>Description</th>
+              <th>Quantity</th>
+              <th>Unit</th>
+              <th>Price (CHF)</th>
+              <th>VAT (%)</th>
+              <th>Amount (CHF)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${quote.items.map((item: any, index: number) => `
+              <tr>
+                <td>${index + 1}</td>
+                <td>${item.description}</td>
+                <td class="number">${item.quantity.toFixed(3)}</td>
+                <td>${item.unit}</td>
+                <td class="number">${item.unitPrice.toFixed(2)}</td>
+                <td class="number">${(item.vatRate * 100).toFixed(1)}%</td>
+                <td class="number">${item.lineTotal.toFixed(2)}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="7">No items</td></tr>'}
+          </tbody>
+        </table>
+
+        <div class="totals">
+          <table>
+            <tr><td>Subtotal:</td><td>CHF ${quote.subtotal.toFixed(2)}</td></tr>
+            <tr><td>VAT:</td><td>CHF ${quote.vatAmount.toFixed(2)}</td></tr>
+            <tr class="total-row"><td><strong>Total CHF:</strong></td><td><strong>${quote.total.toFixed(2)}</strong></td></tr>
+          </table>
+        </div>
+
+        ${quote.acceptanceLink ? `
+        <div style="margin-top: 40px; padding: 20px; background-color: #fef3c7; border: 1px solid #f59e0b;">
+          <h3 style="color: #92400e;">Accept Quote</h3>
+          <p style="color: #92400e;">Click the link below or scan the QR code to accept this quote:</p>
+          <div style="margin-top: 20px; text-align: center;">
+            <img src="${qrCodeImage}" alt="Accept Quote QR Code" style="width: 140px; height: 140px; border: 1px solid #000;" />
+            <p style="font-size: 10px;">Scan to accept quote</p>
+          </div>
+        </div>
+        ` : ''}
+
+        <div style="margin-top: 30px; text-align: center; font-size: 10px; color: #666;">
+          Generated on ${new Date().toLocaleDateString('de-CH')} at ${new Date().toLocaleTimeString('de-CH')}
+        </div>
+      </body>
+      </html>
+    `
 
     // Generate PDF
     const htmlPdf = require('html-pdf-node')

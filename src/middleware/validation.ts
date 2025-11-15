@@ -85,9 +85,14 @@ export const schemas = {
     city: Joi.string().min(2).max(100).required(),
     phone: Joi.string().optional(),
     companyEmail: Joi.string().email().required(),
+    website: Joi.string().uri().optional(),
     uid: Joi.string().optional(),
     vatNumber: Joi.string().optional(),
-    iban: Joi.string().optional()
+    iban: Joi.string().optional(),
+    qrIban: Joi.string().optional(),
+    bankName: Joi.string().optional(),
+    paymentTerms: Joi.number().integer().min(1).max(365).optional(),
+    defaultLanguage: Joi.string().valid('de', 'fr', 'it', 'en').optional()
   }),
 
   // Customer schemas
@@ -131,6 +136,10 @@ export const schemas = {
     customerId: Joi.string().required(),
     date: Joi.date().optional(),
     dueDate: Joi.date().optional(),
+    serviceDate: Joi.date().required().messages({
+      'any.required': 'Leistungsdatum ist zwingend erforderlich für die MWST-Abrechnung',
+      'date.base': 'Leistungsdatum muss ein gültiges Datum sein'
+    }),
     discountCode: Joi.string().optional(),
     discountAmount: Joi.number().min(0).default(0),
     items: Joi.array().items(
@@ -149,6 +158,9 @@ export const schemas = {
     customerId: Joi.string().optional(),
     date: Joi.date().optional(),
     dueDate: Joi.date().optional(),
+    serviceDate: Joi.date().optional().messages({
+      'date.base': 'Leistungsdatum muss ein gültiges Datum sein'
+    }),
     status: Joi.string().valid('DRAFT', 'SENT', 'PAID', 'OVERDUE').optional(),
     discountCode: Joi.string().optional(),
     discountAmount: Joi.number().min(0).optional(),

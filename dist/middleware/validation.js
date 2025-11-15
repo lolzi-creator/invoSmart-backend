@@ -65,9 +65,14 @@ exports.schemas = {
         city: joi_1.default.string().min(2).max(100).required(),
         phone: joi_1.default.string().optional(),
         companyEmail: joi_1.default.string().email().required(),
+        website: joi_1.default.string().uri().optional(),
         uid: joi_1.default.string().optional(),
         vatNumber: joi_1.default.string().optional(),
-        iban: joi_1.default.string().optional()
+        iban: joi_1.default.string().optional(),
+        qrIban: joi_1.default.string().optional(),
+        bankName: joi_1.default.string().optional(),
+        paymentTerms: joi_1.default.number().integer().min(1).max(365).optional(),
+        defaultLanguage: joi_1.default.string().valid('de', 'fr', 'it', 'en').optional()
     }),
     createCustomer: joi_1.default.object({
         name: joi_1.default.string().min(2).max(100).required(),
@@ -106,6 +111,10 @@ exports.schemas = {
         customerId: joi_1.default.string().required(),
         date: joi_1.default.date().optional(),
         dueDate: joi_1.default.date().optional(),
+        serviceDate: joi_1.default.date().required().messages({
+            'any.required': 'Leistungsdatum ist zwingend erforderlich für die MWST-Abrechnung',
+            'date.base': 'Leistungsdatum muss ein gültiges Datum sein'
+        }),
         discountCode: joi_1.default.string().optional(),
         discountAmount: joi_1.default.number().min(0).default(0),
         items: joi_1.default.array().items(joi_1.default.object({
@@ -121,6 +130,9 @@ exports.schemas = {
         customerId: joi_1.default.string().optional(),
         date: joi_1.default.date().optional(),
         dueDate: joi_1.default.date().optional(),
+        serviceDate: joi_1.default.date().optional().messages({
+            'date.base': 'Leistungsdatum muss ein gültiges Datum sein'
+        }),
         status: joi_1.default.string().valid('DRAFT', 'SENT', 'PAID', 'OVERDUE').optional(),
         discountCode: joi_1.default.string().optional(),
         discountAmount: joi_1.default.number().min(0).optional(),

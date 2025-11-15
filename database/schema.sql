@@ -120,6 +120,7 @@ CREATE TABLE invoices (
   company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
   date DATE NOT NULL DEFAULT CURRENT_DATE,
   due_date DATE NOT NULL,
+  service_date DATE NOT NULL, -- Leistungsdatum (zwingend für MWST-Abrechnung)
   status invoice_status NOT NULL DEFAULT 'DRAFT',
   subtotal BIGINT NOT NULL DEFAULT 0, -- in Rappen
   vat_amount BIGINT NOT NULL DEFAULT 0, -- in Rappen
@@ -327,23 +328,112 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to generate QR reference (simplified)
+-- Function to calculate Modulo 10 checksum (ISO 11649)
+CREATE OR REPLACE FUNCTION calculate_modulo10_checksum(input_str VARCHAR)
+RETURNS INTEGER AS $$
+DECLARE
+  sum_val INTEGER := 0;
+  i INTEGER;
+  digit INTEGER;
+  weight INTEGER;
+BEGIN
+  -- Reverse the string and process each digit
+  FOR i IN REVERSE LENGTH(input_str)..1 LOOP
+    digit := CAST(SUBSTRING(input_str FROM i FOR 1) AS INTEGER);
+    -- Alternate weight: 1, 3, 1, 3, ...
+    weight := CASE WHEN (LENGTH(input_str) - i + 1) % 2 = 1 THEN 1 ELSE 3 END;
+    sum_val := sum_val + (digit * weight);
+  END LOOP;
+  
+  -- Calculate check digit: (10 - (sum mod 10)) mod 10
+  RETURN (10 - (sum_val % 10)) % 10;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to generate QR reference (27-digit numeric with Modulo 10 checksum)
+-- QR references are only used with QR-IBAN
 CREATE OR REPLACE FUNCTION generate_qr_reference(invoice_num VARCHAR(50), company_uuid UUID)
 RETURNS VARCHAR(50) AS $$
 DECLARE
   base_number VARCHAR(50);
   checksum INTEGER;
   qr_reference VARCHAR(50);
+  numeric_part VARCHAR(50);
+  uuid_part VARCHAR(10);
 BEGIN
-  -- Simplified QR reference generation (in production, use proper Swiss QR algorithm)
-  base_number := SUBSTRING(company_uuid::TEXT FROM 1 FOR 6) || REGEXP_REPLACE(invoice_num, '\D', '', 'g');
+  -- Extract numeric part from invoice number (e.g., "20250001" from "RE-2025-0001")
+  numeric_part := REGEXP_REPLACE(invoice_num, '\D', '', 'g');
   
-  -- Simple checksum (replace with proper Modulo 10 in production)
-  checksum := (LENGTH(base_number) * 7) % 10;
+  -- Extract part from UUID to make it unique (first 6 chars, convert to numeric)
+  uuid_part := REGEXP_REPLACE(SUBSTRING(company_uuid::TEXT FROM 1 FOR 6), '[^0-9]', '', 'g');
   
+  -- If UUID part is too short, pad with zeros, if too long, truncate
+  IF LENGTH(uuid_part) = 0 THEN
+    uuid_part := '000000';
+  ELSIF LENGTH(uuid_part) > 6 THEN
+    uuid_part := SUBSTRING(uuid_part FROM 1 FOR 6);
+  END IF;
+  
+  -- Build base number: ensure we have exactly 26 digits before checksum
+  -- Format: [uuid_part (max 6)] + [numeric_part] + padding to reach 26 digits
+  base_number := LPAD(uuid_part || numeric_part, 26, '0');
+  
+  -- If still too long, truncate from left
+  IF LENGTH(base_number) > 26 THEN
+    base_number := SUBSTRING(base_number FROM LENGTH(base_number) - 25 FOR 26);
+  END IF;
+  
+  -- Calculate Modulo 10 checksum
+  checksum := calculate_modulo10_checksum(base_number);
+  
+  -- QR reference: 27 digits total (26 digits + 1 check digit)
   qr_reference := base_number || checksum::TEXT;
   
   RETURN qr_reference;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to generate SCOR reference (RF prefix with ISO 11649 checksum)
+-- SCOR references are only used with normal IBAN (not QR-IBAN)
+CREATE OR REPLACE FUNCTION generate_scor_reference(invoice_num VARCHAR(50), company_uuid UUID)
+RETURNS VARCHAR(50) AS $$
+DECLARE
+  base_string VARCHAR(50);
+  checksum INTEGER;
+  scor_reference VARCHAR(50);
+  numeric_part VARCHAR(50);
+  uuid_part VARCHAR(10);
+BEGIN
+  -- Extract numeric part from invoice number
+  numeric_part := REGEXP_REPLACE(invoice_num, '\D', '', 'g');
+  
+  -- Extract part from UUID
+  uuid_part := REGEXP_REPLACE(SUBSTRING(company_uuid::TEXT FROM 1 FOR 6), '[^0-9]', '', 'g');
+  
+  IF LENGTH(uuid_part) = 0 THEN
+    uuid_part := '000000';
+  ELSIF LENGTH(uuid_part) > 6 THEN
+    uuid_part := SUBSTRING(uuid_part FROM 1 FOR 6);
+  END IF;
+  
+  -- Build base: ensure we have enough digits for SCOR (max 21 digits after RF)
+  -- SCOR format: RF + 2 check digits + up to 21 alphanumeric characters
+  -- We'll use numeric only for simplicity: RF + 2 check digits + numeric part
+  base_string := LPAD(uuid_part || numeric_part, 21, '0');
+  
+  -- If too long, truncate
+  IF LENGTH(base_string) > 21 THEN
+    base_string := SUBSTRING(base_string FROM LENGTH(base_string) - 20 FOR 21);
+  END IF;
+  
+  -- Calculate ISO 11649 checksum for "RF" + base_string
+  -- Convert RF to numbers: R=27, F=15, so RF = 2715
+  checksum := calculate_modulo10_checksum('2715' || base_string);
+  
+  -- SCOR reference: RF + 2-digit checksum + base string
+  scor_reference := 'RF' || LPAD(checksum::TEXT, 2, '0') || base_string;
+  
+  RETURN scor_reference;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -513,6 +603,7 @@ SELECT
   i.number,
   i.date,
   i.due_date,
+  i.service_date, -- Leistungsdatum (für MWST-Abrechnung)
   i.status,
   i.total,
   i.paid_amount,

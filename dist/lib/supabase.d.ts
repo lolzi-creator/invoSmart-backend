@@ -19,6 +19,15 @@ export declare const db: {
 export declare const handleSupabaseError: (error: any, operation: string) => never;
 export declare const generateInvoiceNumber: (companyId: string) => Promise<string>;
 export declare const generateQRReference: (invoiceNumber: string, companyId: string) => Promise<string>;
+export declare const generateSCORReference: (invoiceNumber: string, companyId: string) => Promise<string>;
+export declare const generatePaymentReference: (invoiceNumber: string, companyId: string, company: {
+    qr_iban?: string | null;
+    iban?: string | null;
+}) => Promise<{
+    reference: string;
+    referenceType: "QRR" | "SCOR";
+    iban: string;
+}>;
 export interface DatabaseUser {
     id: string;
     email: string;
@@ -79,6 +88,7 @@ export interface DatabaseInvoice {
     company_id: string;
     date: string;
     due_date: string;
+    service_date: string;
     status: 'DRAFT' | 'OPEN' | 'PARTIAL_PAID' | 'PAID' | 'OVERDUE' | 'CANCELLED';
     subtotal: number;
     vat_amount: number;

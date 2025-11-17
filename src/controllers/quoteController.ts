@@ -963,14 +963,14 @@ export const sendQuoteEmail = asyncHandler(async (req: AuthenticatedRequest, res
         const { data: logoData, error: logoError } = await supabaseAdmin.storage
           .from('logos')
           .download(logoPath)
-        
+          
         if (!logoError && logoData) {
           const logoBuffer = Buffer.from(await logoData.arrayBuffer())
           logoBase64 = `data:${logoData.type || 'image/png'};base64,${logoBuffer.toString('base64')}`
-        }
+      }
       } catch (err) {
         console.log('⚠️ Could not fetch logo:', err)
-      }
+    }
     }
     
     // Generate acceptance QR code

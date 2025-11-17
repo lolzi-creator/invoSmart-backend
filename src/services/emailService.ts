@@ -291,7 +291,7 @@ export class EmailService {
         subject: 'Nouveau Devis - {{QUOTE_NUMBER}}',
         html: this.getQuoteNotificationHTML('fr'),
         text: this.getQuoteNotificationText('fr')
-      }
+    }
     }
 
     return templates[lang] || templates['de']
@@ -587,24 +587,24 @@ export class EmailService {
   private getReminder1HTML(lang: SupportedLanguage): string {
     const t = this.getTranslations(lang)
     return `
-<!DOCTYPE html>
-<html>
-<head>
+      <!DOCTYPE html>
+      <html>
+      <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5;">
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%); padding: 30px; text-align: center;">
       <h1 style="color: #ffffff; margin: 0; font-size: 26px;">${t.reminder1Title}</h1>
       <p style="color: #fff8f0; margin: 10px 0 0 0; font-size: 14px;">${t.reminder1Subtitle}</p>
-    </div>
-    
+        </div>
+        
     <!-- Content -->
     <div style="padding: 40px 30px;">
       <p style="font-size: 16px; margin-bottom: 20px;">${lang === 'it' ? 'Gentile' : lang === 'fr' ? 'Madame, Monsieur' : lang === 'en' ? 'Dear' : 'Sehr geehrte/r'} {{CUSTOMER_NAME}},</p>
-      
+          
       <p style="font-size: 16px; color: #555; margin-bottom: 30px;">
         ${t.reminder1Message}
       </p>
@@ -629,8 +629,8 @@ export class EmailService {
             <p style="margin: 8px 0; color: #dc2626; font-weight: 600;">{{OVERDUE_DAYS}} ${t.days}</p>
           </div>
         </div>
-      </div>
-      
+          </div>
+          
       <!-- PDF Attachment Info -->
       <div style="background: #eff6ff; border: 1px solid #bfdbfe; padding: 20px; border-radius: 8px; margin: 30px 0;">
         <p style="margin: 0 0 10px 0; font-weight: bold; color: #1e40af;">
@@ -644,14 +644,14 @@ export class EmailService {
       <p style="font-size: 16px; margin-top: 30px; color: #555;">
         ${t.alreadyPaid}
       </p>
-      
+          
       <p style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #e5e7eb;">
         ${t.greetings},<br>
         <strong style="color: #ff6b35; font-size: 16px;">{{COMPANY_NAME}}</strong><br>
         {{COMPANY_EMAIL}}
       </p>
-    </div>
-    
+        </div>
+        
     <!-- Footer -->
     <div style="background: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
       <p style="margin: 0 0 10px 0; font-size: 12px; color: #666;">
@@ -672,33 +672,33 @@ export class EmailService {
       </p>
       {{/COMPANY_VAT}}
     </div>
-  </div>
-</body>
-</html>
+        </div>
+      </body>
+      </html>
     `.trim()
   }
 
   private getReminder2HTML(lang: SupportedLanguage): string {
     const t = this.getTranslations(lang)
     return `
-<!DOCTYPE html>
-<html>
-<head>
+      <!DOCTYPE html>
+      <html>
+      <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5;">
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #d97706 0%, #f59e0b 100%); padding: 30px; text-align: center;">
       <h1 style="color: #ffffff; margin: 0; font-size: 26px;">${t.reminder2Title}</h1>
       <p style="color: #fff8f0; margin: 10px 0 0 0; font-size: 14px;">${t.reminder2Subtitle}</p>
-    </div>
-    
+        </div>
+        
     <!-- Content -->
     <div style="padding: 40px 30px;">
       <p style="font-size: 16px; margin-bottom: 20px;">${lang === 'it' ? 'Gentile' : lang === 'fr' ? 'Madame, Monsieur' : lang === 'en' ? 'Dear' : 'Sehr geehrte/r'} {{CUSTOMER_NAME}},</p>
-      
+          
       <p style="font-size: 16px; color: #555; margin-bottom: 30px;">
         ${t.reminder2Message}
       </p>
@@ -723,8 +723,8 @@ export class EmailService {
             <p style="margin: 8px 0; color: #dc2626; font-weight: 600;">{{OVERDUE_DAYS}} ${t.days}</p>
           </div>
         </div>
-      </div>
-      
+          </div>
+          
       <!-- Warning Notice -->
       <div style="background: #fef3c7; border: 2px solid #d97706; padding: 20px; border-radius: 8px; margin: 30px 0;">
         <p style="margin: 0 0 10px 0; font-weight: bold; color: #92400e; font-size: 16px;">
@@ -748,14 +748,14 @@ export class EmailService {
       <p style="font-size: 16px; margin-top: 30px; color: #555;">
         ${t.alreadyPaid}
       </p>
-      
+          
       <p style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #e5e7eb;">
         ${t.greetings},<br>
         <strong style="color: #d97706; font-size: 16px;">{{COMPANY_NAME}}</strong><br>
         {{COMPANY_EMAIL}}
       </p>
-    </div>
-    
+        </div>
+        
     <!-- Footer -->
     <div style="background: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
       <p style="margin: 0 0 10px 0; font-size: 12px; color: #666;">
@@ -776,33 +776,33 @@ export class EmailService {
       </p>
       {{/COMPANY_VAT}}
     </div>
-  </div>
-</body>
-</html>
+        </div>
+      </body>
+      </html>
     `.trim()
   }
 
   private getReminder3HTML(lang: SupportedLanguage): string {
     const t = this.getTranslations(lang)
     return `
-<!DOCTYPE html>
-<html>
-<head>
+      <!DOCTYPE html>
+      <html>
+      <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5;">
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); padding: 30px; text-align: center;">
       <h1 style="color: #ffffff; margin: 0; font-size: 26px;">${t.reminder3Title}</h1>
       <p style="color: #fef2f2; margin: 10px 0 0 0; font-size: 14px;">${t.reminder3Subtitle}</p>
-    </div>
-    
+        </div>
+        
     <!-- Content -->
     <div style="padding: 40px 30px;">
       <p style="font-size: 16px; margin-bottom: 20px;">${lang === 'it' ? 'Gentile' : lang === 'fr' ? 'Madame, Monsieur' : lang === 'en' ? 'Dear' : 'Sehr geehrte/r'} {{CUSTOMER_NAME}},</p>
-      
+          
       <!-- Urgent Notice -->
       <div style="background: #fee2e2; border: 2px solid #dc2626; padding: 20px; border-radius: 8px; margin: 30px 0;">
         <p style="margin: 0 0 10px 0; font-weight: bold; color: #7f1d1d; font-size: 18px;">
@@ -811,8 +811,8 @@ export class EmailService {
         <p style="margin: 0; font-size: 14px; color: #7f1d1d;">
           ${t.reminder3Message}
         </p>
-      </div>
-      
+          </div>
+          
       <!-- Invoice Summary -->
       <div style="background: #fee2e2; border-left: 4px solid #dc2626; padding: 20px; margin: 30px 0; border-radius: 6px;">
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; font-size: 14px;">
@@ -843,8 +843,8 @@ export class EmailService {
         <p style="margin: 0; font-size: 14px; color: #1e3a8a;">
           ${t.reminderPdfDescription}
         </p>
-      </div>
-      
+          </div>
+          
       <p style="font-size: 16px; margin-top: 30px; color: #555;">
         ${t.additionalCosts}
       </p>
@@ -852,14 +852,14 @@ export class EmailService {
       <p style="font-size: 16px; margin-top: 20px; color: #555;">
         ${t.proofRequired}
       </p>
-      
+          
       <p style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #e5e7eb;">
         ${t.greetings},<br>
         <strong style="color: #dc2626; font-size: 16px;">{{COMPANY_NAME}}</strong><br>
         {{COMPANY_EMAIL}}
       </p>
-    </div>
-    
+        </div>
+        
     <!-- Footer -->
     <div style="background: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
       <p style="margin: 0 0 10px 0; font-size: 12px; color: #666;">
@@ -880,33 +880,33 @@ export class EmailService {
       </p>
       {{/COMPANY_VAT}}
     </div>
-  </div>
-</body>
-</html>
+        </div>
+      </body>
+      </html>
     `.trim()
   }
 
   private getInvoiceNotificationHTML(lang: SupportedLanguage): string {
     const t = this.getTranslations(lang)
     return `
-<!DOCTYPE html>
-<html>
-<head>
+      <!DOCTYPE html>
+      <html>
+      <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f5f5f5;">
   <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
     <!-- Header -->
     <div style="background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%); padding: 30px; text-align: center;">
       <h1 style="color: #ffffff; margin: 0; font-size: 28px;">${t.newInvoice}</h1>
       <p style="color: #fff8f0; margin: 10px 0 0 0; font-size: 14px;">{{INVOICE_NUMBER}}</p>
-    </div>
-    
+        </div>
+        
     <!-- Content -->
     <div style="padding: 40px 30px;">
       <p style="font-size: 16px; margin-bottom: 20px;">${lang === 'it' ? 'Gentile' : lang === 'fr' ? 'Madame, Monsieur' : lang === 'en' ? 'Dear' : 'Sehr geehrte/r'} {{CUSTOMER_NAME}},</p>
-      
+          
       <p style="font-size: 16px; color: #555; margin-bottom: 30px;">
         ${t.thankYou}
       </p>
@@ -931,8 +931,8 @@ export class EmailService {
             <p style="margin: 8px 0; color: #dc2626; font-weight: 600;">{{DUE_DATE}}</p>
           </div>
         </div>
-      </div>
-      
+          </div>
+          
       <!-- PDF Attachment Info -->
       <div style="background: #eff6ff; border: 1px solid #bfdbfe; padding: 20px; border-radius: 8px; margin: 30px 0;">
         <p style="margin: 0 0 10px 0; font-weight: bold; color: #1e40af;">
@@ -946,14 +946,14 @@ export class EmailService {
       <p style="font-size: 16px; margin-top: 30px; color: #555;">
         ${t.paymentRequest}
       </p>
-      
+          
       <p style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #e5e7eb;">
         ${t.greetings},<br>
         <strong style="color: #ff6b35; font-size: 16px;">{{COMPANY_NAME}}</strong><br>
         {{COMPANY_EMAIL}}
       </p>
-    </div>
-    
+        </div>
+        
     <!-- Footer -->
     <div style="background: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
       <p style="margin: 0 0 10px 0; font-size: 12px; color: #666;">
@@ -974,9 +974,9 @@ export class EmailService {
       </p>
       {{/COMPANY_VAT}}
     </div>
-  </div>
-</body>
-</html>
+        </div>
+      </body>
+      </html>
     `.trim()
   }
 

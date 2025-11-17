@@ -535,8 +535,9 @@ CREATE OR REPLACE FUNCTION create_default_vat_rates(company_uuid UUID)
 RETURNS VOID AS $$
 BEGIN
   INSERT INTO vat_rates (name, rate, is_default, is_active, company_id) VALUES
-    ('Standard 7.7%', 770, true, true, company_uuid),
-    ('Reduziert 2.5%', 250, false, true, company_uuid),
+    ('Standard 8.1%', 810, true, true, company_uuid),
+    ('Reduziert 2.6%', 260, false, true, company_uuid),
+    ('Sondersatz Beherbergung 3.8%', 380, false, true, company_uuid),
     ('Befreit 0%', 0, false, true, company_uuid);
 END;
 $$ LANGUAGE plpgsql;

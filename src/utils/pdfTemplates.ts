@@ -36,6 +36,12 @@ interface InvoiceTexts {
   metaReference: string
   metaAmount: string
   itemsHeader: string
+  tableDescription: string
+  tableQuantity: string
+  tableUnit: string
+  tablePrice: string
+  tableVat: string
+  tableTotal: string
   noItems: string
   totalIncludingVat: string
   qrReceiptTitle: string
@@ -139,6 +145,12 @@ const pdfTranslations: Record<SupportedLanguage, PdfTranslation> = {
       metaReference: 'Referenz',
       metaAmount: 'Betrag',
       itemsHeader: 'Leistungen',
+      tableDescription: 'Beschreibung',
+      tableQuantity: 'Menge',
+      tableUnit: 'Einheit',
+      tablePrice: 'Preis',
+      tableVat: 'MWST',
+      tableTotal: 'Total',
       noItems: 'Keine Positionen',
       totalIncludingVat: 'Total inkl. MWST',
       qrReceiptTitle: 'Empfangsschein',
@@ -244,6 +256,12 @@ const pdfTranslations: Record<SupportedLanguage, PdfTranslation> = {
       metaReference: 'Reference',
       metaAmount: 'Amount',
       itemsHeader: 'Items',
+      tableDescription: 'Description',
+      tableQuantity: 'Quantity',
+      tableUnit: 'Unit',
+      tablePrice: 'Price',
+      tableVat: 'VAT',
+      tableTotal: 'Total',
       noItems: 'No items',
       totalIncludingVat: 'Total incl. VAT',
       qrReceiptTitle: 'Receipt',
@@ -349,6 +367,12 @@ const pdfTranslations: Record<SupportedLanguage, PdfTranslation> = {
       metaReference: 'Riferimento',
       metaAmount: 'Importo',
       itemsHeader: 'Prestazioni',
+      tableDescription: 'Descrizione',
+      tableQuantity: 'Quantità',
+      tableUnit: 'Unità',
+      tablePrice: 'Prezzo',
+      tableVat: 'IVA',
+      tableTotal: 'Totale',
       noItems: 'Nessuna voce',
       totalIncludingVat: 'Totale incl. IVA',
       qrReceiptTitle: 'Ricevuta',
@@ -454,6 +478,12 @@ const pdfTranslations: Record<SupportedLanguage, PdfTranslation> = {
       metaReference: 'Référence',
       metaAmount: 'Montant',
       itemsHeader: 'Prestations',
+      tableDescription: 'Description',
+      tableQuantity: 'Quantité',
+      tableUnit: 'Unité',
+      tablePrice: 'Prix',
+      tableVat: 'TVA',
+      tableTotal: 'Total',
       noItems: 'Aucune position',
       totalIncludingVat: 'Total incl. TVA',
       qrReceiptTitle: 'Récépissé',
@@ -877,9 +907,16 @@ export const generateUnifiedInvoicePdfTemplate = (data: InvoicePdfData): string 
       color: #333;
     }
     
-    .items-table th:last-child {
+    .items-table th:nth-child(2),
+    .items-table th:nth-child(3),
+    .items-table th:nth-child(4),
+    .items-table th:nth-child(5),
+    .items-table th:nth-child(6) {
       text-align: right;
-      width: 25mm;
+    }
+    
+    .items-table th:nth-child(2) {
+      text-align: center;
     }
     
     .items-table tbody {
@@ -897,8 +934,18 @@ export const generateUnifiedInvoicePdfTemplate = (data: InvoicePdfData): string 
       vertical-align: top;
     }
     
-    .items-table td:last-child {
+    .items-table td:nth-child(2) {
+      text-align: center;
+    }
+    
+    .items-table td:nth-child(3),
+    .items-table td:nth-child(4),
+    .items-table td:nth-child(5),
+    .items-table td:nth-child(6) {
       text-align: right;
+    }
+    
+    .items-table td:nth-child(6) {
       font-weight: 500;
     }
     
@@ -1135,17 +1182,33 @@ export const generateUnifiedInvoicePdfTemplate = (data: InvoicePdfData): string 
       <table class="items-table">
         <thead>
           <tr>
-            <th>${invoiceTexts.itemsHeader}</th>
-            <th style="text-align: right;">${invoiceTexts.metaAmount}</th>
+            <th>${invoiceTexts.tableDescription}</th>
+            <th style="text-align: center; width: 15mm;">${invoiceTexts.tableQuantity}</th>
+            <th style="text-align: right; width: 20mm;">${invoiceTexts.tableUnit}</th>
+            <th style="text-align: right; width: 25mm;">${invoiceTexts.tablePrice}</th>
+            <th style="text-align: right; width: 15mm;">${invoiceTexts.tableVat}</th>
+            <th style="text-align: right; width: 25mm;">${invoiceTexts.tableTotal}</th>
           </tr>
         </thead>
         <tbody>
-          ${invoice.invoice_items?.map(item => `
+          ${invoice.invoice_items?.map(item => {
+            // Quantity is stored as * 1000 for 3 decimals (e.g., 10.5 = 10500)
+            const quantity = (item.quantity / 1000).toFixed(3).replace(/\.?0+$/, '')
+            // Unit price in Rappen, convert to CHF
+            const unitPrice = item.unit_price || 0
+            // VAT rate is stored as percentage * 100 (e.g., 7.7% = 770)
+            const vatRate = ((item.vat_rate || 0) / 100).toFixed(1)
+            return `
           <tr>
-            <td class="item-description">${item.description}</td>
-            <td>CHF ${formatCurrency(item.line_total)}</td>
+            <td class="item-description">${item.description || ''}</td>
+            <td style="text-align: center;">${quantity}</td>
+            <td style="text-align: right;">${item.unit || 'Stück'}</td>
+            <td style="text-align: right;">CHF ${formatCurrency(unitPrice)}</td>
+            <td style="text-align: right;">${vatRate}%</td>
+            <td style="text-align: right;">CHF ${formatCurrency(item.line_total || 0)}</td>
           </tr>
-          `).join('') || `<tr><td class="item-description">${invoiceTexts.noItems}</td><td>CHF 0.00</td></tr>`}
+          `
+          }).join('') || `<tr><td class="item-description" colspan="6">${invoiceTexts.noItems}</td></tr>`}
         </tbody>
       </table>
     </div>

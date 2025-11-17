@@ -23,6 +23,7 @@ import companyRoutes from './routes/company'
 import dashboardRoutes from './routes/dashboard'
 import vatRateRoutes from './routes/vatRates'
 import exportRoutes from './routes/exportRoutes'
+import aiRoutes from './routes/aiRoutes'
 // import customerRoutes from './routes/customers'
 // import invoiceRoutes from './routes/invoices'
 // import paymentRoutes from './routes/payments'
@@ -116,6 +117,7 @@ app.use('/api/v1/company', companyRoutes)
 app.use('/api/v1/dashboard', dashboardRoutes)
 app.use('/api/v1/vat-rates', vatRateRoutes)
 app.use('/api/v1/export', exportRoutes)
+app.use('/api/v1/ai', aiRoutes)
 console.log('✅ All API routes registered!')
 // app.use('/api/v1/customers', customerRoutes)
 // app.use('/api/v1/invoices', invoiceRoutes)

@@ -1486,18 +1486,20 @@ export const acceptQuote = asyncHandler(async (req: any, res: Response) => {
     const qrReference = await generateQRReference(invoiceNumber, quoteData.company_id)
 
     // Calculate due date based on customer payment terms
-    const invoiceDate = new Date(quote.date)
+    const quoteDateObj = quote.date instanceof Date ? quote.date : new Date(quote.date)
     const customerPaymentTerms = quote.customer?.paymentTerms || 30
-    const dueDate = new Date(invoiceDate.getTime() + customerPaymentTerms * 24 * 60 * 60 * 1000)
+    const dueDate = new Date(quoteDateObj.getTime() + customerPaymentTerms * 24 * 60 * 60 * 1000)
 
     // Prepare invoice data (using values from quote)
+    const invoiceDate = quote.date instanceof Date ? quote.date.toISOString().split('T')[0] : quote.date
     const invoiceData = {
       company_id: quoteData.company_id,
       customer_id: quoteData.customer_id,
       number: invoiceNumber,
       qr_reference: qrReference,
       status: 'OPEN' as any, // OPEN status means sent to customer, awaiting payment
-      date: quote.date instanceof Date ? quote.date.toISOString().split('T')[0] : quote.date,
+      date: invoiceDate,
+      service_date: invoiceDate, // Service date required for VAT reporting - use invoice date
       due_date: dueDate.toISOString().split('T')[0],
       subtotal: Math.round(quote.subtotal * 100), // Already in Rappen
       vat_amount: Math.round(quote.vatAmount * 100),

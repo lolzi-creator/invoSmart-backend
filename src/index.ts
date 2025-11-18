@@ -142,21 +142,34 @@ app.get('/api/v1/test', (req, res) => {
 // Simple email test endpoint (no auth required)
 app.post('/api/v1/test-email', async (req, res) => {
   try {
-    console.log('🧪 Testing email service...')
+    console.log('📧 Sending email...')
     
-    // Get invoice data from request body or use defaults
-    const invoiceData = req.body.invoice || {
-      number: 'RE-2025-0001',
-      total: 2154, // 21.54 CHF in Rappen
-      due_date: '2025-11-05',
-      date: '2025-10-06',
-      customer_name: 'mahnunh',
-      customer_company: '',
-      customer_email: '',
-      customer_language: 'de',
-      subtotal: 2000,
-      vat_amount: 154,
-      status: 'OPEN'
+    // Get invoice data from request body
+    const invoiceData = req.body.invoice
+    
+    // Validate required fields
+    if (!invoiceData) {
+      res.status(400).json({
+        success: false,
+        error: 'Invoice data is required in request body'
+      })
+      return
+    }
+    
+    if (!invoiceData.customer_email) {
+      res.status(400).json({
+        success: false,
+        error: 'Customer email is required'
+      })
+      return
+    }
+    
+    if (!invoiceData.number) {
+      res.status(400).json({
+        success: false,
+        error: 'Invoice number is required'
+      })
+      return
     }
     
     // Format amount in Swiss Francs
@@ -175,9 +188,19 @@ app.post('/api/v1/test-email', async (req, res) => {
     const { Resend } = require('resend')
     const resend = new Resend(process.env.RESEND_API_KEY)
     
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(invoiceData.customer_email)) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid email address format'
+      })
+      return
+    }
+    
     const result = await resend.emails.send({
       from: `${config.email.fromName} <${config.email.fromEmail}>`,
-      to: ['mkrshkov@gmail.com'],
+      to: [invoiceData.customer_email],
       subject: `Zahlungserinnerung - Rechnung ${invoiceData.number}`,
       html: `
         <!DOCTYPE html>
@@ -254,16 +277,16 @@ app.post('/api/v1/test-email', async (req, res) => {
               <p>Vielen Dank für Ihre prompte Zahlung!</p>
               
               <p>Mit freundlichen Grüssen,<br>
-              <strong>Admin AG</strong><br>
+              <strong>${invoiceData.company_name || invoiceData.company?.name || 'Ihr Team'}</strong><br>
               <span style="color: #6c757d; font-size: 14px;">Ihr invoSmart Team</span></p>
             </div>
             
             <div class="footer">
               <div class="contact-info">
                 <strong>Kontakt:</strong><br>
-                📧 mkrshkov@gmail.com<br>
-                🌐 invoSmart.com<br>
-                📞 +41 78 220 92 71
+                ${invoiceData.company_email || invoiceData.company?.email ? `📧 ${invoiceData.company_email || invoiceData.company?.email}<br>` : ''}
+                ${invoiceData.company_website || invoiceData.company?.website ? `🌐 ${invoiceData.company_website || invoiceData.company?.website}<br>` : ''}
+                ${invoiceData.company_phone || invoiceData.company?.phone ? `📞 ${invoiceData.company_phone || invoiceData.company?.phone}` : ''}
               </div>
               <div style="margin-top: 16px; font-size: 12px; color: #999;">
                 Diese E-Mail wurde automatisch generiert. Bitte antworten Sie nicht direkt auf diese E-Mail.
@@ -297,14 +320,11 @@ Falls Sie diese Rechnung bereits bezahlt haben, können Sie diese E-Mail ignorie
 Vielen Dank für Ihre prompte Zahlung!
 
 Mit freundlichen Grüssen,
-Admin AG
+${invoiceData.company_name || invoiceData.company?.name || 'Ihr Team'}
 Ihr invoSmart Team
 
 ---
-Kontakt:
-📧 mkrshkov@gmail.com
-🌐 invoSmart.com
-📞 +41 78 220 92 71
+${(invoiceData.company_email || invoiceData.company?.email) ? `Kontakt:\n📧 ${invoiceData.company_email || invoiceData.company?.email}\n` : ''}${(invoiceData.company_website || invoiceData.company?.website) ? `🌐 ${invoiceData.company_website || invoiceData.company?.website}\n` : ''}${(invoiceData.company_phone || invoiceData.company?.phone) ? `📞 ${invoiceData.company_phone || invoiceData.company?.phone}` : ''}
 
 Diese E-Mail wurde automatisch generiert. Bitte antworten Sie nicht direkt auf diese E-Mail.`
     })
@@ -313,7 +333,7 @@ Diese E-Mail wurde automatisch generiert. Bitte antworten Sie nicht direkt auf d
     
     res.json({
       success: true,
-      message: 'Test email sent successfully!',
+      message: 'Email sent successfully!',
       messageId: result.data?.id
     })
     
@@ -321,7 +341,7 @@ Diese E-Mail wurde automatisch generiert. Bitte antworten Sie nicht direkt auf d
     console.error('❌ Email test failed:', error)
     res.status(500).json({
       success: false,
-      error: 'Failed to send test email',
+      error: 'Failed to send email',
       details: error instanceof Error ? error.message : 'Unknown error'
     })
   }

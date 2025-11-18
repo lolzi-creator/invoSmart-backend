@@ -286,7 +286,7 @@ export const testEmail = async (req: AuthenticatedRequest, res: Response) => {
       companies: DatabaseCompany 
     }
 
-    // Send test email
+    // Send email
     const emailService = new EmailService()
     const result = await emailService.sendInvoiceReminder({
       invoice: testInvoiceData,
@@ -298,19 +298,19 @@ export const testEmail = async (req: AuthenticatedRequest, res: Response) => {
     if (result.success) {
       return res.json({ 
         success: true, 
-        message: 'Test email sent successfully',
+        message: 'Email sent successfully',
         data: result 
       })
     } else {
       return res.status(500).json({ 
         success: false, 
-        error: 'Failed to send test email',
+        error: 'Failed to send email',
         details: result.error 
       })
     }
 
   } catch (error) {
-    console.error('Error sending test email:', error)
+    console.error('Error sending email:', error)
     return res.status(500).json({ 
       success: false, 
       error: 'Internal server error' 

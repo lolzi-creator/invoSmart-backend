@@ -409,11 +409,48 @@ async function queryCustomers(companyId: string, data: any) {
  * Create customer automatically
  */
 async function createCustomerAction(companyId: string, data: any) {
-  const { name, email, phone, address, city, zip, country = 'CH' } = data
+  const { name, email, phone, address, city, zip, country: countryInput = 'CH', language: languageInput } = data
 
   if (!name) {
     throw new Error('Customer name is required')
   }
+
+  // Normalize country to 2-character code (e.g., "Switzerland" -> "CH")
+  const countryMap: Record<string, string> = {
+    'switzerland': 'CH',
+    'schweiz': 'CH',
+    'suisse': 'CH',
+    'svizzera': 'CH',
+    'germany': 'DE',
+    'deutschland': 'DE',
+    'france': 'FR',
+    'italy': 'IT',
+    'italien': 'IT',
+    'austria': 'AT',
+    'österreich': 'AT'
+  }
+  const country = countryInput.length === 2 
+    ? countryInput.toUpperCase() 
+    : (countryMap[countryInput.toLowerCase()] || 'CH')
+
+  // Normalize language to 2-character code (e.g., "German" -> "de")
+  const languageMap: Record<string, string> = {
+    'german': 'de',
+    'deutsch': 'de',
+    'english': 'en',
+    'englisch': 'en',
+    'french': 'fr',
+    'französisch': 'fr',
+    'français': 'fr',
+    'italian': 'it',
+    'italienisch': 'it',
+    'italiano': 'it'
+  }
+  const language = languageInput 
+    ? (languageInput.length === 2 
+        ? languageInput.toLowerCase() 
+        : (languageMap[languageInput.toLowerCase()] || 'de'))
+    : 'de'
 
   // Generate unique customer number
   const { data: latestCustomer } = await db.customers()
@@ -440,7 +477,7 @@ async function createCustomerAction(companyId: string, data: any) {
       country,
       payment_terms: 30,
       is_active: true,
-      language: 'de'
+      language
     })
     .select()
     .single()
